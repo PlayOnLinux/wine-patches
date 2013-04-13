@@ -1,0 +1,175 @@
+From: "Erich E. Hoover" <ehoover@mymail.mines.edu>
+Subject: [PATCH 1/4] server: Add completion information to async IO callback (try 2, resend).
+Message-Id: <CAEU2+vo11yvcwH3ESFRutuQqx_5XTKnBb+3QsrZmiY7ORJMxdg@mail.gmail.com>
+Date: Wed, 9 May 2012 13:18:05 -0600
+
+Real Name:
+    Erich Hoover
+
+Description:
+    The completion handle and key are necessary for an async IO
+callback to properly set completion information even when the file
+handle is closed (this information is required in order to use
+NtSetIoCompletion).  The attached patch adds returning this
+information to the server so that ntdll has the necessary information
+to give to the async callback (part 3).
+    I'm resending this patch series because the original first patch
+in the series was accepted and it has now dropped off the list without
+the rest of the series being read.  I would really like to see Wine
+have release-day support for Diablo III, so I appreciate any and all
+feedback on these patches and I will do my very best to immediately
+address any concerns or discuss alternative solutions to fixing this
+problem (Bug #27657).
+
+Changelog:
+    server: Add completion information to async IO callback.
+
+From cbd30d54bc9e589612bd7081f959d1fda1d420fc Mon Sep 17 00:00:00 2001
+From: Erich Hoover <ehoover@mines.edu>
+Date: Wed, 9 May 2012 13:00:09 -0600
+Subject: server: Add completion information to async IO callback.
+
+---
+ server/async.c      |    7 +++++--
+ server/fd.c         |   11 +++++++++--
+ server/file.h       |    2 +-
+ server/protocol.def |    4 +++-
+ tools/make_requests |    2 +-
+ 5 files changed, 19 insertions(+), 7 deletions(-)
+
+diff --git a/server/async.c b/server/async.c
+index dd28dff..38b3b4f 100644
+--- a/server/async.c
++++ b/server/async.c
+@@ -43,7 +43,8 @@ struct async
+     unsigned int         timeout_status;  /* status to report upon timeout */
+     struct event        *event;
+     struct completion   *completion;
+-    apc_param_t          comp_key;
++    apc_param_t          comp_key;        /* completion key (multi-use) */
++    obj_handle_t         comp_handle;     /* completion handle to return to APC callbacks */
+     async_data_t         data;            /* data for async I/O call */
+ };
+ 
+@@ -155,6 +156,8 @@ void async_terminate( struct async *async, unsigned int status )
+     data.async_io.user   = async->data.arg;
+     data.async_io.sb     = async->data.iosb;
+     data.async_io.status = status;
++    data.async_io.ckey   = async->comp_key;
++    data.async_io.chandle= async->comp_handle;
+     thread_queue_apc( async->thread, &async->obj, &data );
+     async->status = status;
+     async_reselect( async );
+@@ -214,7 +217,7 @@ struct async *create_async( struct thread *thread, struct async_queue *queue, co
+     async->timeout = NULL;
+     async->queue   = (struct async_queue *)grab_object( queue );
+     async->completion = NULL;
+-    if (queue->fd) async->completion = fd_get_completion( queue->fd, &async->comp_key );
++    if (queue->fd) async->completion = fd_get_completion( queue->fd, &async->comp_key, &async->comp_handle );
+ 
+     list_add_tail( &queue->queue, &async->queue_entry );
+     grab_object( async );
+diff --git a/server/fd.c b/server/fd.c
+index a8b3a5f..6666431 100644
+--- a/server/fd.c
++++ b/server/fd.c
+@@ -188,6 +188,7 @@ struct fd
+     struct async_queue  *wait_q;      /* other async waiters of this fd */
+     struct completion   *completion;  /* completion object attached to this fd */
+     apc_param_t          comp_key;    /* completion key to set in completion events */
++    obj_handle_t         comp_handle; /* completion handle to give APC callbacks */
+ };
+ 
+ static void fd_dump( struct object *obj, int verbose );
+@@ -1585,6 +1586,8 @@ static struct fd *alloc_fd_object(void)
+     fd->write_q    = NULL;
+     fd->wait_q     = NULL;
+     fd->completion = NULL;
++    fd->comp_key   = 0;
++    fd->comp_handle= 0;
+     list_init( &fd->inode_entry );
+     list_init( &fd->locks );
+ 
+@@ -1620,6 +1623,8 @@ struct fd *alloc_pseudo_fd( const struct fd_ops *fd_user_ops, struct object *use
+     fd->write_q    = NULL;
+     fd->wait_q     = NULL;
+     fd->completion = NULL;
++    fd->comp_key   = 0;
++    fd->comp_handle= 0;
+     fd->no_fd_status = STATUS_BAD_DEVICE_TYPE;
+     list_init( &fd->inode_entry );
+     list_init( &fd->locks );
+@@ -2193,16 +2198,17 @@ static struct fd *get_handle_fd_obj( struct process *process, obj_handle_t handl
+     return fd;
+ }
+ 
+-struct completion *fd_get_completion( struct fd *fd, apc_param_t *p_key )
++struct completion *fd_get_completion( struct fd *fd, apc_param_t *p_key, obj_handle_t *p_handle )
+ {
+     *p_key = fd->comp_key;
++    *p_handle = fd->comp_handle;
+     return fd->completion ? (struct completion *)grab_object( fd->completion ) : NULL;
+ }
+ 
+ void fd_copy_completion( struct fd *src, struct fd *dst )
+ {
+     assert( !dst->completion );
+-    dst->completion = fd_get_completion( src, &dst->comp_key );
++    dst->completion = fd_get_completion( src, &dst->comp_key, &dst->comp_handle );
+ }
+ 
+ /* flush a file buffers */
+@@ -2349,6 +2355,7 @@ DECL_HANDLER(set_completion_info)
+         if (!(fd->options & (FILE_SYNCHRONOUS_IO_ALERT | FILE_SYNCHRONOUS_IO_NONALERT)) && !fd->completion)
+         {
+             fd->completion = get_completion_obj( current->process, req->chandle, IO_COMPLETION_MODIFY_STATE );
++            fd->comp_handle = req->chandle;
+             fd->comp_key = req->ckey;
+         }
+         else set_error( STATUS_INVALID_PARAMETER );
+diff --git a/server/file.h b/server/file.h
+index ead356d..faf9b15 100644
+--- a/server/file.h
++++ b/server/file.h
+@@ -164,7 +164,7 @@ extern void async_terminate( struct async *async, unsigned int status );
+ extern int async_wake_up_by( struct async_queue *queue, struct process *process,
+                              struct thread *thread, client_ptr_t iosb, unsigned int status );
+ extern void async_wake_up( struct async_queue *queue, unsigned int status );
+-extern struct completion *fd_get_completion( struct fd *fd, apc_param_t *p_key );
++extern struct completion *fd_get_completion( struct fd *fd, apc_param_t *p_key, obj_handle_t *p_handle );
+ extern void fd_copy_completion( struct fd *src, struct fd *dst );
+ 
+ /* access rights that require Unix read permission */
+diff --git a/server/protocol.def b/server/protocol.def
+index 31a3b0d..73fc48e 100644
+--- a/server/protocol.def
++++ b/server/protocol.def
+@@ -442,9 +442,11 @@ typedef union
+     {
+         enum apc_type    type;     /* APC_ASYNC_IO */
+         unsigned int     status;   /* I/O status */
+-        client_ptr_t     func;     /* unsigned int (*func)(void*, void*, unsigned int, void **); */
++        client_ptr_t     func;     /* unsigned int (*func)(void*, void*, unsigned int, void **, FILE_COMPLETION_INFORMATION* ); */
+         client_ptr_t     user;     /* user pointer */
+         client_ptr_t     sb;       /* status block */
++        obj_handle_t     chandle;  /* completion handle */
++        apc_param_t      ckey;     /* completion key */
+     } async_io;
+     struct
+     {
+diff --git a/tools/make_requests b/tools/make_requests
+index 445ad06..163a954 100755
+--- a/tools/make_requests
++++ b/tools/make_requests
+@@ -45,7 +45,7 @@ my %formats =
+     "timeout_t"     => [  8,   8,  "&dump_timeout" ],
+     "rectangle_t"   => [  16,  4,  "&dump_rectangle" ],
+     "char_info_t"   => [  4,   2,  "&dump_char_info" ],
+-    "apc_call_t"    => [  40,  8,  "&dump_apc_call" ],
++    "apc_call_t"    => [  44,  8,  "&dump_apc_call" ],
+     "apc_result_t"  => [  40,  8,  "&dump_apc_result" ],
+     "async_data_t"  => [  40,  8,  "&dump_async_data" ],
+     "luid_t"        => [  8,   4,  "&dump_luid" ],
+-- 
+1.7.5.4
+

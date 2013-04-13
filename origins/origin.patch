@@ -1,0 +1,13 @@
+diff --git a/server/mutex.c b/server/mutex.c
+index 31a529a..b3ccfac 100644
+--- a/server/mutex.c
++++ b/server/mutex.c
+@@ -167,6 +167,7 @@ static unsigned int mutex_map_access( struct object *obj, unsigned int access )
+     if (access & GENERIC_WRITE)   access |= STANDARD_RIGHTS_WRITE | MUTEX_MODIFY_STATE;
+     if (access & GENERIC_EXECUTE) access |= STANDARD_RIGHTS_EXECUTE;
+     if (access & GENERIC_ALL)     access |= STANDARD_RIGHTS_ALL | MUTEX_ALL_ACCESS;
++    if (access & SYNCHRONIZE)     access |= MUTEX_MODIFY_STATE;
+     return access & ~(GENERIC_READ | GENERIC_WRITE | GENERIC_EXECUTE | GENERIC_ALL);
+ }
+ 
+

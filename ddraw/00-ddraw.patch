@@ -1,0 +1,67 @@
+--- dlls/wined3d/swapchain_gdi.c.1.2	2010-07-16 17:05:45.000000000 +0200
++++ dlls/wined3d/swapchain_gdi.c	2010-10-27 19:39:04.000000000 +0200
+@@ -101,7 +101,7 @@ void x11_copy_to_screen(IWineD3DSwapChai
+ 
+         hSurfaceDC = front->hDC;
+ 
+-        hDisplayWnd = This->win_handle;
++        hDisplayWnd = GetDesktopWindow();
+         hDisplayDC = GetDCEx(hDisplayWnd, 0, DCX_CLIPSIBLINGS|DCX_CACHE);
+         if(rc) {
+             TRACE(" copying rect (%d,%d)->(%d,%d), offset (%d,%d)\n",
+--- dlls/ddraw/main.c.1.2	2010-07-16 17:05:45.000000000 +0200
++++ dlls/ddraw/main.c	2010-10-27 19:46:22.000000000 +0200
+@@ -53,7 +53,7 @@ static typeof(WineDirect3DCreate) *pWine
+ WINE_DEFAULT_DEBUG_CHANNEL(ddraw);
+ 
+ /* The configured default surface */
+-WINED3DSURFTYPE DefaultSurfaceType = SURFACE_UNKNOWN;
++WINED3DSURFTYPE DefaultSurfaceType = SURFACE_GDI;
+ 
+ /* DDraw list and critical section */
+ static struct list global_ddraw_list = LIST_INIT(global_ddraw_list);
+@@ -766,6 +766,13 @@ static inline DWORD get_config_key(HKEY 
+     return ERROR_FILE_NOT_FOUND;
+ }
+ 
++void print_gdi_surface_warning()
++{
++    FIXME("This is a hacked ddraw defaulting to GDI even when opengl surfaces would be used!\n");
++    FIXME("The normal way to default to GDI surfaces is to set \"HKEY_CURRENT_USER\\Software\\Wine\\Direct3D\" to \"gdi\"\n");
++    FIXME("If that works for you then you shouldn't use this hack.\n");
++}
++
+ /***********************************************************************
+  * DllMain (DDRAW.0)
+  *
+@@ -839,14 +846,16 @@ DllMain(HINSTANCE hInstDLL,
+                 }
+                 else if (!strcmp(buffer,"opengl"))
+                 {
+-                    TRACE("Defaulting to opengl surfaces\n");
+-                    DefaultSurfaceType = SURFACE_OPENGL;
++                    TRACE("Not defaulting to opengl surfaces, in spite of the registry setting\n");
++                    print_gdi_surface_warning();
+                 }
+                 else
+                 {
+                     ERR("Unknown default surface type. Supported are:\n gdi, opengl\n");
++                    print_gdi_surface_warning();
+                 }
+             }
++            print_gdi_surface_warning();
+         }
+ 
+         /* On Windows one can force the refresh rate that DirectDraw uses by
+--- dlls/ddraw/ddraw.c.1.2	2010-07-16 17:05:45.000000000 +0200
++++ dlls/ddraw/ddraw.c	2010-10-27 19:48:54.000000000 +0200
+@@ -479,7 +479,8 @@ IDirectDrawImpl_SetCooperativeLevel(IDir
+             !(This->devicewindow) &&
+             (hwnd != window) )
+         {
+-            HRESULT hr = IWineD3DDevice_AcquireFocusWindow(This->wineD3DDevice, hwnd);
++            HRESULT hr = IWineD3DDevice_AcquireFocusWindow(This->wineD3DDevice, GetDesktopWindow());
++            FIXME("This is a hacked ddraw drawing to the desktop window instead of the window the app requested!\n");
+             if (FAILED(hr))
+             {
+                 ERR("Failed to acquire focus window, hr %#x.\n", hr);

@@ -1,0 +1,231 @@
+Author: K1773R <K1773R@darkgamex.ch>
+Date: 06.03.2012 08:52:17 +0100
+
+--- a/dlls/ddraw/ddraw.c	2011-10-06 23:50:23.000000000 +0200
++++ b/dlls/ddraw/ddraw.c	2012-03-06 08:42:22.774583476 +0100
+@@ -5755,43 +5755,42 @@
+     return DDENUMRET_OK;
+ }
+ 
++static void STDMETHODCALLTYPE ddraw_frontbuffer_destroyed(void *parent)
++{
++    struct IDirectDrawImpl *ddraw = parent;
++    ddraw->wined3d_frontbuffer = NULL;
++}
++
++static const struct wined3d_parent_ops ddraw_frontbuffer_parent_ops =
++{
++    ddraw_frontbuffer_destroyed,
++};
++
+ static HRESULT STDMETHODCALLTYPE device_parent_CreateRenderTarget(IWineD3DDeviceParent *iface,
+         void *container_parent, UINT width, UINT height, enum wined3d_format_id format,
+         WINED3DMULTISAMPLE_TYPE multisample_type, DWORD multisample_quality, BOOL lockable,
+         struct wined3d_surface **surface)
+ {
+-    struct IDirectDrawImpl *This = ddraw_from_device_parent(iface);
+-    IDirectDrawSurfaceImpl *d3d_surface = This->d3d_target;
+-    IDirectDrawSurfaceImpl *target = NULL;
++    struct IDirectDrawImpl *ddraw = ddraw_from_device_parent(iface);
++    HRESULT hr;
+ 
+     TRACE("iface %p, container_parent %p, width %u, height %u, format %#x, multisample_type %#x,\n"
+             "\tmultisample_quality %u, lockable %u, surface %p\n",
+             iface, container_parent, width, height, format, multisample_type, multisample_quality, lockable, surface);
+ 
+-    if (d3d_surface->isRenderTarget)
+-    {
+-        IDirectDrawSurface7_EnumAttachedSurfaces((IDirectDrawSurface7 *)d3d_surface, &target, findRenderTarget);
+-    }
+-    else
+-    {
+-        target = d3d_surface;
+-    }
+-
+-    if (!target)
+-    {
+-        target = This->d3d_target;
+-        ERR(" (%p) : No DirectDrawSurface found to create the back buffer. Using the front buffer as back buffer. Uncertain consequences\n", This);
++    if (ddraw->wined3d_frontbuffer)
++	{
++        ERR("Frontbuffer already created.\n");
++        return E_FAIL;
+     }
+ 
+-    /* TODO: Return failure if the dimensions do not match, but this shouldn't happen */
++    hr = wined3d_surface_create(ddraw->wineD3DDevice, width, height, format, lockable, FALSE, 0,
++            WINED3DUSAGE_RENDERTARGET, WINED3DPOOL_DEFAULT, multisample_type, multisample_quality,
++            DefaultSurfaceType, ddraw, &ddraw_frontbuffer_parent_ops, surface);
++    if (SUCCEEDED(hr))
++        ddraw->wined3d_frontbuffer = *surface;
+ 
+-    *surface = target->wined3d_surface;
+-    wined3d_surface_incref(*surface);
+-    target->isRenderTarget = TRUE;
+-
+-    TRACE("Returning wineD3DSurface %p, it belongs to surface %p\n", *surface, d3d_surface);
+-
+-    return D3D_OK;
++    return hr;
+ }
+ 
+ static HRESULT STDMETHODCALLTYPE device_parent_CreateDepthStencilSurface(IWineD3DDeviceParent *iface,
+--- a/dlls/ddraw/ddraw_private.h	2011-10-06 23:50:23.000000000 +0200
++++ b/dlls/ddraw/ddraw_private.h	2012-03-06 08:12:51.705208518 +0100
+@@ -116,6 +116,7 @@
+ 
+     /* Helpers for surface creation */
+     IDirectDrawSurfaceImpl *tex_root;
++    struct wined3d_surface *wined3d_frontbuffer;
+     BOOL                    depthstencil;
+ 
+     /* For the dll unload cleanup code */
+--- a/dlls/ddraw/surface.c	2011-10-06 23:50:23.000000000 +0200
++++ b/dlls/ddraw/surface.c	2012-03-06 08:22:48.145833501 +0100
+@@ -36,6 +36,12 @@
+             - FIELD_OFFSET(IDirectDrawSurfaceImpl, IDirectDrawGammaControl_vtbl));
+ }
+ 
++static HRESULT ddraw_surface_update_frontbuffer(IDirectDrawSurfaceImpl *surface)
++{
++    return wined3d_surface_blt(surface->ddraw->wined3d_frontbuffer, NULL,
++            surface->wined3d_surface, NULL, 0, NULL, WINED3DTEXF_POINT);
++}
++
+ /*****************************************************************************
+  * IUnknown parts follow
+  *****************************************************************************/
+@@ -698,6 +704,8 @@
+     hr = wined3d_surface_unmap(This->wined3d_surface);
+     if (SUCCEEDED(hr))
+     {
++        if (This->surface_desc.ddsCaps.dwCaps & DDSCAPS_FRONTBUFFER)
++            hr = ddraw_surface_update_frontbuffer(This);
+         This->surface_desc.lpSurface = NULL;
+     }
+     LeaveCriticalSection(&ddraw_cs);
+@@ -769,6 +777,8 @@
+     }
+ 
+     hr = wined3d_surface_flip(This->wined3d_surface, Override->wined3d_surface, Flags);
++    if (SUCCEEDED(hr) && This->surface_desc.ddsCaps.dwCaps & DDSCAPS_FRONTBUFFER)
++        hr = ddraw_surface_update_frontbuffer(This);
+     LeaveCriticalSection(&ddraw_cs);
+     return hr;
+ }
+@@ -858,6 +868,8 @@
+      * struct are supported anyway. */
+     hr = wined3d_surface_blt(This->wined3d_surface, DestRect, Src ? Src->wined3d_surface : NULL,
+             SrcRect, Flags, (WINEDDBLTFX *)DDBltFx, WINED3DTEXF_LINEAR);
++    if (SUCCEEDED(hr) && (This->surface_desc.ddsCaps.dwCaps & DDSCAPS_FRONTBUFFER))
++        hr = ddraw_surface_update_frontbuffer(This);
+ 
+     LeaveCriticalSection(&ddraw_cs);
+     switch(hr)
+@@ -1187,6 +1199,8 @@
+ 
+     EnterCriticalSection(&ddraw_cs);
+     hr = wined3d_surface_releasedc(This->wined3d_surface, hdc);
++    if (SUCCEEDED(hr) && (This->surface_desc.ddsCaps.dwCaps & DDSCAPS_FRONTBUFFER))
++        hr = ddraw_surface_update_frontbuffer(This);
+     LeaveCriticalSection(&ddraw_cs);
+     return hr;
+ }
+@@ -2396,6 +2410,8 @@
+     EnterCriticalSection(&ddraw_cs);
+     hr = wined3d_surface_bltfast(This->wined3d_surface, dstx, dsty,
+             src ? src->wined3d_surface : NULL, rsrc, trans);
++    if (SUCCEEDED(hr) && (This->surface_desc.ddsCaps.dwCaps & DDSCAPS_FRONTBUFFER))
++        hr = ddraw_surface_update_frontbuffer(This);
+     LeaveCriticalSection(&ddraw_cs);
+     switch(hr)
+     {
+@@ -2855,6 +2871,14 @@
+     /* Release the old palette */
+     if(oldPal) IDirectDrawPalette_Release(oldPal);
+ 
++    /* Update the wined3d frontbuffer if this is the frontbuffer. */
++    if ((This->surface_desc.ddsCaps.dwCaps & DDSCAPS_FRONTBUFFER) && This->ddraw->wined3d_frontbuffer)
++    {
++        hr = wined3d_surface_set_palette(This->ddraw->wined3d_frontbuffer, PalImpl ? PalImpl->wineD3DPalette : NULL);
++        if (FAILED(hr))
++            ERR("Failed to set frontbuffer palette, hr %#x.\n", hr);
++    }
++
+     /* If this is a front buffer, also update the back buffers
+      * TODO: How do things work for palettized cube textures?
+      */
+--- a/dlls/wined3d/surface.c	2011-10-06 23:50:10.000000000 +0200
++++ b/dlls/wined3d/surface.c	2012-03-06 08:28:45.194583304 +0100
+@@ -3597,37 +3597,37 @@
+ 
+ HRESULT CDECL wined3d_surface_flip(struct wined3d_surface *surface, struct wined3d_surface *override, DWORD flags)
+ {
+-    struct wined3d_swapchain *swapchain;
+-    HRESULT hr;
+-
+     TRACE("surface %p, override %p, flags %#x.\n", surface, override, flags);
+ 
+-    if (surface->container.type != WINED3D_CONTAINER_SWAPCHAIN)
++    if (flags)
+     {
+-        ERR("Flipped surface is not on a swapchain.\n");
++        static UINT once;
++        if (!once++)
++            FIXME("Ignoring flags %#x.\n", flags);
++        else
++            WARN("Ignoring flags %#x.\n", flags);
++    }
++
++    if (surface->container.type == WINED3D_CONTAINER_SWAPCHAIN)
++    {
++        ERR("Not supported on swapchain surfaces.\n");
+         return WINEDDERR_NOTFLIPPABLE;
+     }
+-    swapchain = surface->container.u.swapchain;
+ 
+-    hr = surface->surface_ops->surface_flip(surface, override);
+-    if (FAILED(hr))
+-        return hr;
++    /* Flipping is only supported on render targets and overlays. */
++    if (!(surface->resource.usage & (WINED3DUSAGE_RENDERTARGET | WINED3DUSAGE_OVERLAY)))
++    {
++        WARN("Tried to flip a non-render target, non-overlay surface.\n");
++        return WINEDDERR_NOTFLIPPABLE;
++    }
+ 
+-    /* Just overwrite the swapchain presentation interval. This is ok because
+-     * only ddraw apps can call Flip, and only d3d8 and d3d9 applications
+-     * specify the presentation interval. */
+-    if (!(flags & (WINEDDFLIP_NOVSYNC | WINEDDFLIP_INTERVAL2 | WINEDDFLIP_INTERVAL3 | WINEDDFLIP_INTERVAL4)))
+-        swapchain->presentParms.PresentationInterval = WINED3DPRESENT_INTERVAL_ONE;
+-    else if (flags & WINEDDFLIP_NOVSYNC)
+-        swapchain->presentParms.PresentationInterval = WINED3DPRESENT_INTERVAL_IMMEDIATE;
+-    else if (flags & WINEDDFLIP_INTERVAL2)
+-        swapchain->presentParms.PresentationInterval = WINED3DPRESENT_INTERVAL_TWO;
+-    else if (flags & WINEDDFLIP_INTERVAL3)
+-        swapchain->presentParms.PresentationInterval = WINED3DPRESENT_INTERVAL_THREE;
+-    else
+-        swapchain->presentParms.PresentationInterval = WINED3DPRESENT_INTERVAL_FOUR;
++    flip_surface(surface, override);
++
++    /* Update overlays if they're visible. */
++    if ((surface->resource.usage & WINED3DUSAGE_OVERLAY) && surface->overlay_dest)
++        return surface_draw_overlay(surface);
+ 
+-    return wined3d_swapchain_present(swapchain, NULL, NULL, swapchain->win_handle, NULL, 0);
++    return WINED3D_OK;
+ }
+ 
+ /* Do not call while under the GL lock. */
+--- a/dlls/ddraw/main.c	2011-10-06 23:50:23.000000000 +0200
++++ b/dlls/ddraw/main.c	2012-03-06 08:51:35.464583133 +0100
+@@ -37,7 +37,7 @@
+ WINE_DEFAULT_DEBUG_CHANNEL(ddraw);
+ 
+ /* The configured default surface */
+-WINED3DSURFTYPE DefaultSurfaceType = SURFACE_UNKNOWN;
++WINED3DSURFTYPE DefaultSurfaceType = SURFACE_OPENGL;
+ 
+ /* DDraw list and critical section */
+ static struct list global_ddraw_list = LIST_INIT(global_ddraw_list);

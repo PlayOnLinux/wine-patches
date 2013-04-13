@@ -1,0 +1,119 @@
+From: "Erich E. Hoover" <ehoover@mymail.mines.edu>
+Subject: [PATCH 1/4] server: Move completion from async object to async queue.
+Message-Id: <CAEU2+vpegbGe6rDF5owMsAym246AQv93RR4Q=UqHxyhr7a009w@mail.gmail.com>
+Date: Fri, 25 May 2012 14:43:37 -0600
+
+Real Name:
+    Erich Hoover
+
+Description:
+    It seems that the completion information should be associated with
+the async queue, rather than the async object, since the completion
+information for a file handle can be updated after an async IO has
+been queued.  So, the attached patch moves the completion information
+from the async object into the async queue so that we can properly
+handle associating a completion with a file descriptor after an async
+IO is queued (part 2).
+
+Changelog:
+    server: Move completion from async object to async queue.
+
+From 5cf907980562ffa52c1100f4ca47705f926c49c5 Mon Sep 17 00:00:00 2001
+From: Erich Hoover <ehoover@mines.edu>
+Date: Fri, 25 May 2012 14:29:08 -0600
+Subject: server: Move completion from async object to async queue.
+
+---
+ server/async.c |   23 +++++++++++++++--------
+ 1 files changed, 15 insertions(+), 8 deletions(-)
+
+diff --git a/server/async.c b/server/async.c
+index dd28dff..ebabe09 100644
+--- a/server/async.c
++++ b/server/async.c
+@@ -42,8 +42,6 @@ struct async
+     struct timeout_user *timeout;
+     unsigned int         timeout_status;  /* status to report upon timeout */
+     struct event        *event;
+-    struct completion   *completion;
+-    apc_param_t          comp_key;
+     async_data_t         data;            /* data for async I/O call */
+ };
+ 
+@@ -75,10 +73,13 @@ struct async_queue
+ {
+     struct object        obj;             /* object header */
+     struct fd           *fd;              /* file descriptor owning this queue */
++    struct completion   *completion;      /* completion associated with this queue */
++    apc_param_t          comp_key;        /* completion key associated with this queue */
+     struct list          queue;           /* queue of async objects */
+ };
+ 
+ static void async_queue_dump( struct object *obj, int verbose );
++static void async_queue_destroy( struct object *obj );
+ 
+ static const struct object_ops async_queue_ops =
+ {
+@@ -97,7 +98,7 @@ static const struct object_ops async_queue_ops =
+     no_lookup_name,                  /* lookup_name */
+     no_open_file,                    /* open_file */
+     no_close_handle,                 /* close_handle */
+-    no_destroy                       /* destroy */
++    async_queue_destroy              /* destroy */
+ };
+ 
+ 
+@@ -123,7 +124,6 @@ static void async_destroy( struct object *obj )
+ 
+     if (async->timeout) remove_timeout_user( async->timeout );
+     if (async->event) release_object( async->event );
+-    if (async->completion) release_object( async->completion );
+     release_object( async->queue );
+     release_object( async->thread );
+ }
+@@ -135,6 +135,13 @@ static void async_queue_dump( struct object *obj, int verbose )
+     fprintf( stderr, "Async queue fd=%p\n", async_queue->fd );
+ }
+ 
++static void async_queue_destroy( struct object *obj )
++{
++    struct async_queue *async_queue = (struct async_queue *)obj;
++    assert( obj->ops == &async_queue_ops );
++    if (async_queue->completion) release_object( async_queue->completion );
++}
++
+ /* notifies client thread of new status of its async request */
+ void async_terminate( struct async *async, unsigned int status )
+ {
+@@ -178,6 +185,8 @@ struct async_queue *create_async_queue( struct fd *fd )
+     if (queue)
+     {
+         queue->fd = fd;
++        queue->completion = NULL;
++        if (queue->fd) queue->completion = fd_get_completion( queue->fd, &queue->comp_key );
+         list_init( &queue->queue );
+     }
+     return queue;
+@@ -213,8 +222,6 @@ struct async *create_async( struct thread *thread, struct async_queue *queue, co
+     async->data    = *data;
+     async->timeout = NULL;
+     async->queue   = (struct async_queue *)grab_object( queue );
+-    async->completion = NULL;
+-    if (queue->fd) async->completion = fd_get_completion( queue->fd, &async->comp_key );
+ 
+     list_add_tail( &queue->queue, &async->queue_entry );
+     grab_object( async );
+@@ -258,8 +265,8 @@ void async_set_result( struct object *obj, unsigned int status, unsigned int tot
+         if (async->timeout) remove_timeout_user( async->timeout );
+         async->timeout = NULL;
+         async->status = status;
+-        if (async->completion && async->data.cvalue)
+-            add_completion( async->completion, async->comp_key, async->data.cvalue, status, total );
++        if (async->queue->completion && async->data.cvalue)
++            add_completion( async->queue->completion, async->queue->comp_key, async->data.cvalue, status, total );
+         if (apc)
+         {
+             apc_call_t data;
+-- 
+1.7.5.4
+

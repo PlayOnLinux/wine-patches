@@ -1,0 +1,25 @@
+diff --git a/dlls/ws2_32/socket.c b/dlls/ws2_32/socket.c
+index d3a4590..c3ea460 100644
+--- a/dlls/ws2_32/socket.c
++++ b/dlls/ws2_32/socket.c
+@@ -5822,6 +5822,7 @@ static int WS2_recv_base( SOCKET s, LPWSABUF lpBuffers, DWORD dwBufferCount,
+ 
+             pfd.fd = fd;
+             pfd.events = POLLIN;
++            pfd.revents = 0;
+             if (*lpFlags & WS_MSG_OOB) pfd.events |= POLLPRI;
+ 
+             if (!timeout || !poll( &pfd, 1, timeout ))
+@@ -5831,6 +5832,12 @@ static int WS2_recv_base( SOCKET s, LPWSABUF lpBuffers, DWORD dwBufferCount,
+                 _enable_event(SOCKET2HANDLE(s), FD_READ, 0, 0);
+                 goto error;
+             }
++            if ((pfd.revents & POLLERR) || (pfd.revents & POLLHUP))
++            {
++                err = WSAECONNRESET;
++                _enable_event(SOCKET2HANDLE(s), FD_READ, 0, 0);
++                goto error;
++            }
+         }
+         else
+         {

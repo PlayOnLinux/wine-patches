@@ -1,0 +1,104 @@
+From bf558e09e148c7873d6a5c9138577fc953649cd4 Mon Sep 17 00:00:00 2001
+From: Octavian Voicu <octavian.voicu@gmail.com>
+Date: Mon, 31 Oct 2011 00:57:29 +0200
+Subject: winex11.drv: Make X11 window rect empty for WS_EX_TRANSPARENT windows.
+Reply-To: wine-devel <wine-devel@winehq.org>
+
+--
+Fixes http://bugs.winehq.org/show_bug.cgi?id=28678.
+---
+ dlls/winex11.drv/event.c  |    9 +++++++++
+ dlls/winex11.drv/window.c |   26 ++++++++++++++++++++++++++
+ 2 files changed, 35 insertions(+), 0 deletions(-)
+
+diff --git a/dlls/winex11.drv/event.c b/dlls/winex11.drv/event.c
+index 00915cf..8d660c2 100644
+--- a/dlls/winex11.drv/event.c
++++ b/dlls/winex11.drv/event.c
+@@ -978,6 +978,7 @@ void X11DRV_ConfigureNotify( HWND hwnd, XEvent *xev )
+     HWND parent;
+     BOOL root_coords;
+     int cx, cy, x = event->x, y = event->y;
++    DWORD ex_style;
+ 
+     if (!hwnd) return;
+     if (!(data = X11DRV_get_win_data( hwnd ))) return;
+@@ -1019,6 +1020,14 @@ void X11DRV_ConfigureNotify( HWND hwnd, XEvent *xev )
+     X11DRV_X_to_window_rect( data, &rect );
+     if (root_coords) MapWindowPoints( 0, parent, (POINT *)&rect, 2 );
+ 
++    ex_style = GetWindowLongW( hwnd, GWL_EXSTYLE );
++    if (ex_style & WS_EX_TRANSPARENT)
++    {
++        FIXME("transparent window, fixing window rect\n");
++        rect.right = rect.left;
++        rect.bottom = rect.top;
++    }
++
+     /* Compare what has changed */
+ 
+     x     = rect.left;
+diff --git a/dlls/winex11.drv/window.c b/dlls/winex11.drv/window.c
+index 6a87afc..6932342 100644
+--- a/dlls/winex11.drv/window.c
++++ b/dlls/winex11.drv/window.c
+@@ -2021,6 +2021,7 @@ struct x11drv_win_data *X11DRV_create_win_data( HWND hwnd )
+     Display *display;
+     struct x11drv_win_data *data;
+     HWND parent;
++    DWORD ex_style;
+ 
+     if (!(parent = GetAncestor( hwnd, GA_PARENT ))) return NULL;  /* desktop */
+ 
+@@ -2032,9 +2033,21 @@ struct x11drv_win_data *X11DRV_create_win_data( HWND hwnd )
+ 
+     GetWindowRect( hwnd, &data->window_rect );
+     MapWindowPoints( 0, parent, (POINT *)&data->window_rect, 2 );
++    ex_style = GetWindowLongW( hwnd, GWL_EXSTYLE );
++    if (ex_style & WS_EX_TRANSPARENT)
++    {
++        FIXME("transparent window, fixing window rect\n");
++        data->window_rect.right = data->window_rect.left;
++        data->window_rect.bottom = data->window_rect.top;
++    }
+     data->whole_rect = data->window_rect;
+     GetClientRect( hwnd, &data->client_rect );
+     MapWindowPoints( hwnd, parent, (POINT *)&data->client_rect, 2 );
++    if (ex_style & WS_EX_TRANSPARENT)
++    {
++        data->client_rect.right = data->client_rect.left;
++        data->client_rect.bottom = data->client_rect.top;
++    }
+ 
+     if (parent == GetDesktopWindow())
+     {
+@@ -2456,6 +2469,7 @@ void CDECL X11DRV_WindowPosChanged( HWND hwnd, HWND insert_after, UINT swp_flags
+     DWORD new_style = GetWindowLongW( hwnd, GWL_STYLE );
+     RECT old_window_rect, old_whole_rect, old_client_rect;
+     int event_type;
++    DWORD ex_style;
+ 
+     if (!data) return;
+ 
+@@ -2472,6 +2486,18 @@ void CDECL X11DRV_WindowPosChanged( HWND hwnd, HWND insert_after, UINT swp_flags
+     TRACE( "win %p window %s client %s style %08x flags %08x\n",
+            hwnd, wine_dbgstr_rect(rectWindow), wine_dbgstr_rect(rectClient), new_style, swp_flags );
+ 
++    ex_style = GetWindowLongW( hwnd, GWL_EXSTYLE );
++    if (ex_style & WS_EX_TRANSPARENT)
++    {
++        FIXME("transparent window, fixing window rect\n");
++        data->window_rect.right = data->window_rect.left;
++        data->window_rect.bottom = data->window_rect.top;
++        data->whole_rect.right = data->whole_rect.left;
++        data->whole_rect.bottom = data->whole_rect.top;
++        data->client_rect.right = data->client_rect.left;
++        data->client_rect.bottom = data->client_rect.top;
++    }
++
+     if (!IsRectEmpty( &valid_rects[0] ))
+     {
+         int x_offset = old_whole_rect.left - data->whole_rect.left;
+-- 
+1.7.4.1
+

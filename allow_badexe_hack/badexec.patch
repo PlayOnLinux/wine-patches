@@ -1,0 +1,37 @@
+diff --git a/dlls/kernel32/process.c b/dlls/kernel32/process.c
+index 8fcf67b..f3ed2c8 100644
+--- a/dlls/kernel32/process.c
++++ b/dlls/kernel32/process.c
+@@ -1223,7 +1223,7 @@ void CDECL __wine_kernel_init(void)
+         DWORD error = GetLastError();
+ 
+         /* if Win16/DOS format, or unavailable address, exec a new process with the proper setup */
+-        if (error == ERROR_BAD_EXE_FORMAT ||
++        if (
+             error == ERROR_INVALID_ADDRESS ||
+             error == ERROR_NOT_ENOUGH_MEMORY)
+         {
+@@ -1239,7 +1239,6 @@ void CDECL __wine_kernel_init(void)
+                 /* args 1 and 2 are --app-name full_path */
+                 MESSAGE( "wine: could not run %s: 16-bit/DOS support missing\n",
+                          debugstr_w(__wine_main_wargv[3]) );
+-                ExitProcess( ERROR_BAD_EXE_FORMAT );
+             }
+             MESSAGE( "wine: cannot find %s\n", debugstr_w(main_exe_name) );
+             ExitProcess( ERROR_FILE_NOT_FOUND );
+@@ -1910,7 +1909,6 @@ static BOOL create_process( HANDLE hFile, LPCWSTR filename, LPWSTR cmd_line, LPW
+     if (!is_win64 && !is_wow64 && (binary_info->flags & BINARY_FLAG_64BIT))
+     {
+         ERR( "starting 64-bit process %s not supported in 32-bit wineprefix\n", debugstr_w(filename) );
+-        SetLastError( ERROR_BAD_EXE_FORMAT );
+         return FALSE;
+     }
+ 
+@@ -2281,7 +2279,6 @@ static BOOL create_process_impl( LPCWSTR app_name, LPWSTR cmd_line, LPSECURITY_A
+     if (binary_info.flags & BINARY_FLAG_DLL)
+     {
+         TRACE( "not starting %s since it is a dll\n", debugstr_w(name) );
+-        SetLastError( ERROR_BAD_EXE_FORMAT );
+     }
+     else switch (binary_info.type)
+     {

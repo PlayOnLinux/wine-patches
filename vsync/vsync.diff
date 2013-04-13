@@ -1,0 +1,13 @@
+diff --git a/dlls/wined3d/context.c b/dlls/wined3d/context.c
+index fe26549..a7ed93b 100644
+--- a/dlls/wined3d/context.c
++++ b/dlls/wined3d/context.c
+@@ -1464,7 +1464,7 @@ struct wined3d_context *context_create(struct wined3d_swapchain *swapchain,
+             swap_interval = 1;
+     }
+
+-    if (gl_info->supported[WGL_EXT_SWAP_CONTROL])
++    if (FALSE && gl_info->supported[WGL_EXT_SWAP_CONTROL])
+     {
+         if (!GL_EXTCALL(wglSwapIntervalEXT(swap_interval)))
+             ERR("wglSwapIntervalEXT failed to set swap interval %d for context %p, last error %#x\n",

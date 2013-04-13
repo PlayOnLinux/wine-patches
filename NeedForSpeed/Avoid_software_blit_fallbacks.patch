@@ -1,0 +1,15 @@
+diff --git a/dlls/wined3d/surface.c b/dlls/wined3d/surface.c
+index a3589b1..0a877dd 100644
+--- a/dlls/wined3d/surface.c
++++ b/dlls/wined3d/surface.c
+@@ -5377,8 +5377,8 @@ static HRESULT IWineD3DSurfaceImpl_BltOverride(struct wined3d_surface *dst_surfa
+ 
+     /* Early sort out of cases where no render target is used */
+     if (!dstSwapchain && !srcSwapchain
+-            && src_surface != device->fb.render_targets[0]
+-            && dst_surface != device->fb.render_targets[0])
++            && !(src_surface->resource.usage & WINED3DUSAGE_RENDERTARGET)
++            && !(dst_surface->resource.usage & WINED3DUSAGE_RENDERTARGET))
+     {
+         TRACE("No surface is render target, not using hardware blit.\n");
+         return WINED3DERR_INVALIDCALL;

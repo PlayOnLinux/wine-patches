@@ -1,0 +1,18 @@
+diff --git a/dlls/user32/winstation.c b/dlls/user32/winstation.c
+index 8126b31..2bc4de0 100644
+--- a/dlls/user32/winstation.c
++++ b/dlls/user32/winstation.c
+@@ -462,11 +462,8 @@ BOOL WINAPI EnumDesktopsW( HWINSTA winsta, DESKTOPENUMPROCW func, LPARAM lparam
+  */
+ HDESK WINAPI OpenInputDesktop( DWORD flags, BOOL inherit, ACCESS_MASK access )
+ {
+-    FIXME( "(%x,%i,%x): stub\n", flags, inherit, access );
+-    SetLastError( ERROR_CALL_NOT_IMPLEMENTED );
+-    return 0;
+-}
+-
++       return CreateDesktopA("Desktop", 0, 0, flags, access, 0);
++}
+
+ /***********************************************************************
+  *              GetUserObjectInformationA   (USER32.@)

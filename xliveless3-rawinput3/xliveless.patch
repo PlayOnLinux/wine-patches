@@ -1,0 +1,39 @@
+diff --git a/configure b/configure
+index 1c453cf..62cc9be 100755
+--- a/configure
++++ b/configure
+@@ -14922,6 +14922,7 @@ wine_fn_config_test dlls/hlink/tests hlink_test
+ wine_fn_config_dll hnetcfg enable_hnetcfg
+ wine_fn_config_dll httpapi enable_httpapi
+ wine_fn_config_dll iccvid enable_iccvid po
++wine_fn_config_dll xlive enable_xlive
+ wine_fn_config_dll icmp enable_icmp
+ wine_fn_config_dll ieframe enable_ieframe implib,po
+ wine_fn_config_test dlls/ieframe/tests ieframe_test
+
+diff --git a/configure.ac b/configure.ac
+index b50d5ed..8c831f6 100644
+--- a/configure.ac
++++ b/configure.ac
+@@ -2388,6 +2388,7 @@ WINE_CONFIG_MAKERULES([dlls/Makedll.rules],[MAKE_DLL_RULES],[Make.rules])
+ WINE_CONFIG_MAKERULES([dlls/Makeimplib.rules],[MAKE_IMPLIB_RULES],[Make.rules])
+ WINE_CONFIG_MAKERULES([programs/Makeprog.rules],[MAKE_PROG_RULES],[Make.rules])
+
++WINE_CONFIG_DLL(xlive)
+ WINE_CONFIG_DLL(acledit)
+ WINE_CONFIG_DLL(aclui,,[implib])
+ WINE_CONFIG_DLL(activeds,,[implib])
+
+diff --git a/dlls/xlive/Makefile.in b/dlls/xlive/Makefile.in
+new file mode 100644
+index 0000000..7dc4efd
+--- /dev/null
++++ b/dlls/xlive/Makefile.in
+@@ -0,0 +1,6 @@
++MODULE    = xlive.dll
++
++C_SRCS = \
++       main.c
++
++@MAKE_DLL_RULES@
+

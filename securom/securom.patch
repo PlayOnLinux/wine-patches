@@ -1,0 +1,18 @@
+diff --git a/dlls/ntdll/thread.c b/dlls/ntdll/thread.c
+index e328c5f..3389f53 100644
+--- a/dlls/ntdll/thread.c
++++ b/dlls/ntdll/thread.c
+@@ -734,7 +734,13 @@ NTSTATUS WINAPI NtSetContextThread( HANDLE handle, const CONTEXT *context )
+         if (ret) return ret;
+     }
+ 
+-    if (self) set_cpu_context( context );
++    if (self)
++    {
++        if ((context->ContextFlags & CONTEXT_CONTROL) &&
++            (context->Eip > (void *) &NtGetContextThread) && context->Eip < ((char *) &NtGetContextThread + 1000))
++            ((CONTEXT *)context)->ContextFlags &= ~(CONTEXT_CONTROL | CONTEXT_INTEGER | CONTEXT_SEGMENTS);
++        set_cpu_context( context );
++    }
+     return STATUS_SUCCESS;
+ }

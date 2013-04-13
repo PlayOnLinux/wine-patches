@@ -1,0 +1,24 @@
+diff --git a/dlls/kernel32/file.c b/dlls/kernel32/file.c
+index 089f693..98bf390 100644
+--- a/dlls/kernel32/file.c
++++ b/dlls/kernel32/file.c
+@@ -352,6 +352,9 @@ BOOL WINAPI ReadFileEx(HANDLE hFile, LPVOID buffer, DWORD bytesToRead,
+     status = NtReadFile(hFile, NULL, FILE_ReadWriteApc, lpCompletionRoutine,
+                         io_status, buffer, bytesToRead, &offset, NULL);
+ 
++    if (status == STATUS_PENDING)
++	return TRUE;
++
+     if (status)
+     {
+         SetLastError( RtlNtStatusToDosError(status) );
+@@ -484,6 +487,9 @@ BOOL WINAPI WriteFileEx(HANDLE hFile, LPCVOID buffer, DWORD bytesToWrite,
+     status = NtWriteFile(hFile, NULL, FILE_ReadWriteApc, lpCompletionRoutine,
+                          io_status, buffer, bytesToWrite, &offset, NULL);
+ 
++    if (status == STATUS_PENDING)
++	return TRUE;
++
+     if (status) SetLastError( RtlNtStatusToDosError(status) );
+     return !status;
+ }

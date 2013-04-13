@@ -1,0 +1,147 @@
+From e8589d8495966797070e04dad4923f1abd37c243 Mon Sep 17 00:00:00 2001
+From: Daniel Santos <daniel.santos@pobox.com>
+Date: Wed, 11 Jan 2012 00:43:02 -0600
+Subject: Experimental SWBF2 hack
+MIME-Version: 1.0
+Content-Type: multipart/mixed; boundary="------------1.7.3.4"
+
+This is a multi-part message in MIME format.
+--------------1.7.3.4
+Content-Type: text/plain; charset=UTF-8; format=fixed
+Content-Transfer-Encoding: 8bit
+
+---
+ dlls/user32/focus.c        |   10 ++++++++++
+ dlls/user32/message.c      |   18 ++++++++++++++++++
+ dlls/user32/user_main.c    |    3 +++
+ dlls/user32/user_private.h |    5 +++++
+ 4 files changed, 36 insertions(+), 0 deletions(-)
+
+
+--------------1.7.3.4
+Content-Type: text/x-patch; name="0003-Experimental-SWBF2-hack.txt"
+Content-Transfer-Encoding: 8bit
+Content-Disposition: attachment; filename="0003-Experimental-SWBF2-hack.txt"
+
+diff --git a/dlls/user32/focus.c b/dlls/user32/focus.c
+index 6b5312f..7fd97fe 100644
+--- a/dlls/user32/focus.c
++++ b/dlls/user32/focus.c
+@@ -35,6 +35,8 @@
+ 
+ WINE_DEFAULT_DEBUG_CHANNEL(win);
+ 
++HWND forground_window_cache;
++
+ 
+ /*****************************************************************
+  *		set_focus_window
+@@ -362,6 +364,13 @@ HWND WINAPI GetFocus(void)
+ HWND WINAPI GetForegroundWindow(void)
+ {
+     HWND ret = 0;
++	clock_t now;
++
++	now = clock();
++	/* If time not yet expired and not rolled over */
++	if (forground_window_cache && fuckoff_time && (fuckoff_time > now) && !((fuckoff_time & 0x80000000) && !(now & 0x80000000))) {
++		return forground_window_cache;
++	}
+ 
+     SERVER_START_REQ( get_thread_input )
+     {
+@@ -369,6 +378,7 @@ HWND WINAPI GetForegroundWindow(void)
+         if (!wine_server_call_err( req )) ret = wine_server_ptr_handle( reply->foreground );
+     }
+     SERVER_END_REQ;
++	forground_window_cache = ret;
+     return ret;
+ }
+ 
+diff --git a/dlls/user32/message.c b/dlls/user32/message.c
+index a38d77b..d218b77 100644
+--- a/dlls/user32/message.c
++++ b/dlls/user32/message.c
+@@ -24,6 +24,7 @@
+ 
+ #include <assert.h>
+ #include <stdarg.h>
++#include <stdio.h>
+ 
+ #define NONAMELESSUNION
+ #define NONAMELESSSTRUCT
+@@ -3549,6 +3550,20 @@ void WINAPI PostQuitMessage( INT exit_code )
+ BOOL WINAPI DECLSPEC_HOTPATCH PeekMessageW( MSG *msg_out, HWND hwnd, UINT first, UINT last, UINT flags )
+ {
+     MSG msg;
++	clock_t now;
++
++	now = clock();
++	/* If time not yet expired and not rolled over */
++	if (fuckoff_time && (fuckoff_time > now) && !((fuckoff_time & 0x80000000) && !(now & 0x80000000))) {
++		++fuckoff_count;
++		return FALSE;
++	}
++
++	if (next_fuckoff_report < now) {
++		next_fuckoff_report = clock() + CLOCKS_PER_SEC * 8;
++		fprintf(stderr, "fuckoff_count = %u\n", fuckoff_count);
++		fuckoff_count = 0;
++	}
+ 
+     USER_CheckNotLock();
+ 
+@@ -3558,9 +3573,12 @@ BOOL WINAPI DECLSPEC_HOTPATCH PeekMessageW( MSG *msg_out, HWND hwnd, UINT first,
+     if (!peek_message( &msg, hwnd, first, last, flags, 0 ))
+     {
+         if (!(flags & PM_NOYIELD)) wow_handlers.wait_message( 0, NULL, 0, 0, 0 );
++		fuckoff_time = clock() + (CLOCKS_PER_SEC / 1000);
+         return FALSE;
+     }
+ 
++	fuckoff_time = 0;
++
+     /* copy back our internal safe copy of message data to msg_out.
+      * msg_out is a variable from the *program*, so it can't be used
+      * internally as it can get "corrupted" by our use of SendMessage()
+diff --git a/dlls/user32/user_main.c b/dlls/user32/user_main.c
+index 790ba92..6d74a94 100644
+--- a/dlls/user32/user_main.c
++++ b/dlls/user32/user_main.c
+@@ -331,6 +331,9 @@ BOOL WINAPI DllMain( HINSTANCE inst, DWORD reason, LPVOID reserved )
+     case DLL_PROCESS_ATTACH:
+         user32_module = inst;
+         ret = process_attach();
++		fuckoff_time = clock();
++		fuckoff_count = 0;
++		next_fuckoff_report = clock() + CLOCKS_PER_SEC * 8;
+         break;
+     case DLL_THREAD_DETACH:
+         thread_detach();
+diff --git a/dlls/user32/user_private.h b/dlls/user32/user_private.h
+index 1a63bad..b282102 100644
+--- a/dlls/user32/user_private.h
++++ b/dlls/user32/user_private.h
+@@ -22,6 +22,7 @@
+ #define __WINE_USER_PRIVATE_H
+ 
+ #include <stdarg.h>
++#include <time.h>
+ #include "windef.h"
+ #include "winbase.h"
+ #include "wingdi.h"
+@@ -35,6 +36,10 @@
+ #define WM_SYSTIMER	    0x0118
+ #define WM_POPUPSYSTEMMENU  0x0313
+ 
++clock_t fuckoff_time;
++unsigned fuckoff_count;
++clock_t next_fuckoff_report;
++
+ /* internal messages codes */
+ enum wine_internal_message
+ {
+
+--------------1.7.3.4--
+
+

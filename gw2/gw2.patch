@@ -1,0 +1,14 @@
+diff --git a/dlls/wined3d/wined3d.spec b/dlls/wined3d/wined3d.spec
+index 9e0cb65..746b528 100644
+--- a/dlls/wined3d/wined3d.spec
++++ b/dlls/wined3d/wined3d.spec
+@@ -10,7 +10,7 @@
+  @ cdecl wined3d_decref(ptr)
+  @ cdecl wined3d_enum_adapter_modes(ptr long long long ptr)
+  @ cdecl wined3d_get_adapter_count(ptr)
+-@ cdecl wined3d_get_adapter_display_mode(ptr long ptr)
++@ cdecl wined3d_get_adapter_display_mode(ptr long ptr ptr)
+  @ cdecl wined3d_get_adapter_identifier(ptr long long ptr)
+  @ cdecl wined3d_get_adapter_mode_count(ptr long long)
+  @ cdecl wined3d_get_adapter_monitor(ptr long)
+

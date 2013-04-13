@@ -1,0 +1,143 @@
+From: "Erich E. Hoover" <ehoover@mymail.mines.edu>
+Subject: [PATCH 3/4] ws2_32,ntdll: Update async IO callbacks to include completion information (try 2, resend).
+Message-Id: <CAEU2+vqVOKaJLzk_Q09yvY8G=MjiwBinH_7aK2yoArZPxR-xrA@mail.gmail.com>
+Date: Wed, 9 May 2012 13:22:25 -0600
+
+Real Name:
+    Erich Hoover
+
+Description:
+    Only two DLLs use register_async to create async IO callbacks
+(ntdll and ws2_32).  This patch updates the APC_ASYNC_IO return from
+the server so that the callback has an extra parameter containing the
+completion information.  With this version the patch uses
+FILE_COMPLETION_INFORMATION instead of IO_COMPLETION_CONTEXT, removing
+the need for additional headers.  This additional information paves
+the way for fixing AcceptEx sending completions for closed file
+handles (part 4).
+
+Changelog:
+    ws2_32,ntdll: Update async IO callbacks to include completion information.
+
+From 8f3f5bca51638bd83e55928ec9fb173ec1b4e092 Mon Sep 17 00:00:00 2001
+From: Erich Hoover <ehoover@mines.edu>
+Date: Wed, 9 May 2012 13:01:25 -0600
+Subject: ws2_32,ntdll: Update async IO callbacks to include completion
+ information.
+
+---
+ dlls/ntdll/file.c    |    6 ++++--
+ dlls/ntdll/sync.c    |    9 +++++++--
+ dlls/ws2_32/socket.c |   17 +++++++++++------
+ 3 files changed, 22 insertions(+), 10 deletions(-)
+
+diff --git a/dlls/ntdll/file.c b/dlls/ntdll/file.c
+index 8e48602..33ca49a 100644
+--- a/dlls/ntdll/file.c
++++ b/dlls/ntdll/file.c
+@@ -358,7 +358,8 @@ NTSTATUS FILE_GetNtStatus(void)
+ /***********************************************************************
+  *             FILE_AsyncReadService      (INTERNAL)
+  */
+-static NTSTATUS FILE_AsyncReadService(void *user, PIO_STATUS_BLOCK iosb, NTSTATUS status, void **apc)
++static NTSTATUS FILE_AsyncReadService(void *user, PIO_STATUS_BLOCK iosb, NTSTATUS status, void **apc,
++                                      FILE_COMPLETION_INFORMATION *comp)
+ {
+     async_fileio_read *fileio = user;
+     int fd, needs_close, result;
+@@ -847,7 +848,8 @@ NTSTATUS WINAPI NtReadFileScatter( HANDLE file, HANDLE event, PIO_APC_ROUTINE ap
+ /***********************************************************************
+  *             FILE_AsyncWriteService      (INTERNAL)
+  */
+-static NTSTATUS FILE_AsyncWriteService(void *user, IO_STATUS_BLOCK *iosb, NTSTATUS status, void **apc)
++static NTSTATUS FILE_AsyncWriteService(void *user, IO_STATUS_BLOCK *iosb, NTSTATUS status, void **apc,
++                                       FILE_COMPLETION_INFORMATION *comp)
+ {
+     async_fileio_write *fileio = user;
+     int result, fd, needs_close;
+diff --git a/dlls/ntdll/sync.c b/dlls/ntdll/sync.c
+index f759ce6..2cf0e7e 100644
+--- a/dlls/ntdll/sync.c
++++ b/dlls/ntdll/sync.c
+@@ -864,11 +864,16 @@ static BOOL invoke_apc( const apc_call_t *call, apc_result_t *result )
+     case APC_ASYNC_IO:
+     {
+         void *apc = NULL;
++        FILE_COMPLETION_INFORMATION comp;
+         IO_STATUS_BLOCK *iosb = wine_server_get_ptr( call->async_io.sb );
+-        NTSTATUS (*func)(void *, IO_STATUS_BLOCK *, NTSTATUS, void **) = wine_server_get_ptr( call->async_io.func );
++        NTSTATUS (*func)(void *, IO_STATUS_BLOCK *, NTSTATUS, void **, FILE_COMPLETION_INFORMATION *);
++
++        comp.CompletionPort = wine_server_ptr_handle( call->async_io.chandle );
++        comp.CompletionKey = call->async_io.ckey;
++        func = wine_server_get_ptr( call->async_io.func );
+         result->type = call->type;
+         result->async_io.status = func( wine_server_get_ptr( call->async_io.user ),
+-                                        iosb, call->async_io.status, &apc );
++                                        iosb, call->async_io.status, &apc, &comp );
+         if (result->async_io.status != STATUS_PENDING)
+         {
+             result->async_io.total = iosb->Information;
+diff --git a/dlls/ws2_32/socket.c b/dlls/ws2_32/socket.c
+index 21e084b..471ff63 100644
+--- a/dlls/ws2_32/socket.c
++++ b/dlls/ws2_32/socket.c
+@@ -1563,7 +1563,8 @@ static int WS2_recv( int fd, struct ws2_async *wsa )
+  *
+  * Handler for overlapped recv() operations.
+  */
+-static NTSTATUS WS2_async_recv( void* user, IO_STATUS_BLOCK* iosb, NTSTATUS status, void **apc)
++static NTSTATUS WS2_async_recv( void* user, IO_STATUS_BLOCK* iosb, NTSTATUS status, void **apc,
++                                FILE_COMPLETION_INFORMATION *comp )
+ {
+     ws2_async* wsa = user;
+     int result = 0, fd;
+@@ -1620,12 +1621,13 @@ static void WINAPI ws2_async_accept_apc( void *arg, IO_STATUS_BLOCK *iosb, ULONG
+  * This function is used to finish the read part of an accept request. It is
+  * needed to place the completion on the correct socket (listener).
+  */
+-static NTSTATUS WS2_async_accept_recv( void *arg, IO_STATUS_BLOCK *iosb, NTSTATUS status, void **apc )
++static NTSTATUS WS2_async_accept_recv( void *arg, IO_STATUS_BLOCK *iosb, NTSTATUS status, void **apc,
++                                       FILE_COMPLETION_INFORMATION *comp )
+ {
+     void *junk;
+     struct ws2_accept_async *wsa = arg;
+ 
+-    status = WS2_async_recv( wsa->read, iosb, status, &junk );
++    status = WS2_async_recv( wsa->read, iosb, status, &junk, comp );
+     if (status == STATUS_PENDING)
+         return status;
+ 
+@@ -1643,7 +1645,8 @@ static NTSTATUS WS2_async_accept_recv( void *arg, IO_STATUS_BLOCK *iosb, NTSTATU
+  *
+  * This is the function called to satisfy the AcceptEx callback
+  */
+-static NTSTATUS WS2_async_accept( void *arg, IO_STATUS_BLOCK *iosb, NTSTATUS status, void **apc )
++static NTSTATUS WS2_async_accept( void *arg, IO_STATUS_BLOCK *iosb, NTSTATUS status, void **apc,
++                                  FILE_COMPLETION_INFORMATION *comp )
+ {
+     struct ws2_accept_async *wsa = arg;
+     int len;
+@@ -1794,7 +1797,8 @@ static int WS2_send( int fd, struct ws2_async *wsa )
+  *
+  * Handler for overlapped send() operations.
+  */
+-static NTSTATUS WS2_async_send(void* user, IO_STATUS_BLOCK* iosb, NTSTATUS status, void **apc)
++static NTSTATUS WS2_async_send(void* user, IO_STATUS_BLOCK* iosb, NTSTATUS status, void **apc,
++                               FILE_COMPLETION_INFORMATION *comp)
+ {
+     ws2_async* wsa = user;
+     int result = 0, fd;
+@@ -1847,7 +1851,8 @@ static NTSTATUS WS2_async_send(void* user, IO_STATUS_BLOCK* iosb, NTSTATUS statu
+  *
+  * Handler for shutdown() operations on overlapped sockets.
+  */
+-static NTSTATUS WS2_async_shutdown( void* user, PIO_STATUS_BLOCK iosb, NTSTATUS status, void **apc )
++static NTSTATUS WS2_async_shutdown( void* user, PIO_STATUS_BLOCK iosb, NTSTATUS status, void **apc,
++                                    FILE_COMPLETION_INFORMATION *comp )
+ {
+     ws2_async* wsa = user;
+     int fd, err = 1;
+-- 
+1.7.5.4
+

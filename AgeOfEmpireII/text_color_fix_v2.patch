@@ -1,0 +1,115 @@
+From: Alex Henrie <alexhenrie24@gmail.com>
+Subject: [PATCH] winex11: Make MapColor fall back to GetNearestIndex
+Message-Id: <1317316036.3580.4.camel@alex-laptop>
+Date: Thu, 29 Sep 2011 11:07:16 -0600
+
+Fixes bug 2666. Also improves performance of GetNearestIndex and DoCopyDIBSection. Supersedes previously submitted patch.
+---
+ dlls/winex11.drv/dib.c |   54 ++++++++++++++++++++++++++---------------------
+ 1 files changed, 30 insertions(+), 24 deletions(-)
+
+diff --git a/dlls/winex11.drv/dib.c b/dlls/winex11.drv/dib.c
+index 4593d9a..b5c8923 100644
+--- a/dlls/winex11.drv/dib.c
++++ b/dlls/winex11.drv/dib.c
+@@ -32,6 +32,7 @@
+ # endif
+ #endif /* defined(HAVE_LIBXXSHM) */
+ 
++#include <limits.h>
+ #include <stdarg.h>
+ #include <stdlib.h>
+ #include <string.h>
+@@ -313,25 +314,6 @@ static int *X11DRV_DIB_BuildColorMap( X11DRV_PDEVICE *physDev, WORD coloruse, WO
+                                    colorPtr, 0, *nColors);
+ }
+ 
+-/***********************************************************************
+- *           X11DRV_DIB_MapColor
+- */
+-static int X11DRV_DIB_MapColor( int *physMap, int nPhysMap, int phys, int oldcol )
+-{
+-    int color;
+-
+-    if ((oldcol < nPhysMap) && (physMap[oldcol] == phys))
+-        return oldcol;
+-
+-    for (color = 0; color < nPhysMap; color++)
+-        if (physMap[color] == phys)
+-            return color;
+-
+-    WARN("Strange color %08x\n", phys);
+-    return 0;
+-}
+-
+-
+ /*********************************************************************
+  *         X11DRV_DIB_GetNearestIndex
+  *
+@@ -341,7 +323,7 @@ static int X11DRV_DIB_MapColor( int *physMap, int nPhysMap, int phys, int oldcol
+  */
+ static INT X11DRV_DIB_GetNearestIndex(RGBQUAD *colormap, int numColors, BYTE r, BYTE g, BYTE b)
+ {
+-    INT i, best = -1, diff, bestdiff = -1;
++    INT i, best = -1, diff, bestdiff = INT_MAX;
+     RGBQUAD *color;
+ 
+     for(color = colormap, i = 0; i < numColors; color++, i++) {
+@@ -350,13 +332,39 @@ static INT X11DRV_DIB_GetNearestIndex(RGBQUAD *colormap, int numColors, BYTE r,
+ 	       (b - color->rgbBlue) * (b - color->rgbBlue);
+ 	if(diff == 0)
+ 	    return i;
+-	if(best == -1 || diff < bestdiff) {
++	if(diff < bestdiff) {
+ 	    best = i;
+ 	    bestdiff = diff;
+ 	}
+     }
+     return best;
+ }
++
++/***********************************************************************
++ *           X11DRV_DIB_MapColor
++ *
++ * Helper similar to X11DRV_DIB_GetNearestIndex, but optimized for exact matches
++ */
++static int X11DRV_DIB_MapColor( int *physMap, int nPhysMap, int phys, int oldcol )
++{
++    int color;
++
++    /* check if the color is an exact match of the previous color searched for */
++    if ((oldcol < nPhysMap) && (physMap[oldcol] == phys))
++        return oldcol;
++
++    /* check if the color is an exact match of any color in the list */
++    for (color = 0; color < nPhysMap; color++)
++        if (physMap[color] == phys)
++            return color;
++
++    /* find a color that's at least close */
++    return X11DRV_DIB_GetNearestIndex((RGBQUAD*)physMap, nPhysMap,
++                                      ((RGBQUAD*)&phys)->rgbRed,
++                                      ((RGBQUAD*)&phys)->rgbGreen,
++                                      ((RGBQUAD*)&phys)->rgbBlue);
++}
++
+ /*********************************************************************
+  *         X11DRV_DIB_MaskToShift
+  *
+@@ -3456,12 +3464,10 @@ static void X11DRV_DIB_DoCopyDIBSection(X_PHYSBITMAP *physBitmap, BOOL toDIB,
+   descr.compression = dibSection.dsBmih.biCompression;
+   descr.physBitmap  = physBitmap;
+ 
+-  if(descr.infoBpp == 1)
+-      descr.colorMap = (void*)identity;
+-
+   switch (descr.infoBpp)
+   {
+     case 1:
++      descr.colorMap = (void*)identity;
+     case 4:
+     case 8:
+       descr.rMask = descr.gMask = descr.bMask = 0;
+-- 
+1.7.4.1
+

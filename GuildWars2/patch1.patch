@@ -1,0 +1,360 @@
+diff --git a/dlls/crypt32/cert.c b/dlls/crypt32/cert.c
+index 63107e1..5a47a84 100644
+--- a/dlls/crypt32/cert.c
++++ b/dlls/crypt32/cert.c
+@@ -179,12 +179,19 @@ end:
+ PCCERT_CONTEXT WINAPI CertDuplicateCertificateContext(
+  PCCERT_CONTEXT pCertContext)
+ {
++    PWINECRYPT_CERTSTORE hcs;
+     TRACE("(%p)\n", pCertContext);
+ 
+     if (!pCertContext)
+         return NULL;
+ 
+-    Context_AddRef((void *)pCertContext, sizeof(CERT_CONTEXT));
++    /* see comment in CertFreeCertificateContext below */
++    hcs = (PWINECRYPT_CERTSTORE) pCertContext->hCertStore;
++    if (hcs && hcs->dwMagic == WINE_CRYPTCERTSTORE_MAGIC
++            && (hcs->type == StoreTypeMem || hcs->type == StoreTypeProvider))
++        CertDuplicateStore(hcs);
++    else
++        Context_AddRef((void *)pCertContext, sizeof(CERT_CONTEXT));
+     return pCertContext;
+ }
+ 
+@@ -196,13 +203,51 @@ static void CertDataContext_Free(void *context)
+     LocalFree(certContext->pCertInfo);
+ }
+ 
++static void CollectionCert_Free(void *context)
++{
++    PCERT_CONTEXT certContext = context;
++
++    CertFreeCertificateContext(Context_GetLinkedContext(certContext,
++                            sizeof(CERT_CONTEXT)));
++    CertCloseStore(certContext->hCertStore, 0);
++}
++
+ BOOL WINAPI CertFreeCertificateContext(PCCERT_CONTEXT pCertContext)
+ {
++    PWINECRYPT_CERTSTORE hcs;
+     BOOL ret = TRUE;
+ 
+     TRACE("(%p)\n", pCertContext);
+ 
+-    if (pCertContext)
++    if (!pCertContext)
++        return TRUE;
++
++    hcs = (PWINECRYPT_CERTSTORE) pCertContext->hCertStore;
++    if (hcs && hcs->dwMagic == WINE_CRYPTCERTSTORE_MAGIC)
++    {
++        switch (hcs->type)
++        {
++        case StoreTypeCollection:
++            /* If ref counter is down to 0, adjust collection's and linked
++             * certificate's ref counts.
++             */
++            ret = Context_Release2((void *)pCertContext, sizeof(CERT_CONTEXT),
++             CollectionCert_Free);
++            break;
++        case StoreTypeMem:
++        case StoreTypeProvider:
++            /* These two types of store always point to the certificate.
++             * As long as store's ref count is >0 the certificate should not
++             * be freed. Once store's ref count is 0, certificate will be freed
++             * too.
++             */
++            ret = CertCloseStore(hcs, 0);
++            break;
++        default:
++            break;
++        }
++    }
++    else
+         ret = Context_Release((void *)pCertContext, sizeof(CERT_CONTEXT),
+          CertDataContext_Free);
+     return ret;
+diff --git a/dlls/crypt32/collectionstore.c b/dlls/crypt32/collectionstore.c
+index 6fe380c..a9adefc 100644
+--- a/dlls/crypt32/collectionstore.c
++++ b/dlls/crypt32/collectionstore.c
+@@ -145,7 +145,9 @@ static void *CRYPT_CollectionAdvanceEnum(PWINE_COLLECTIONSTORE store,
+     if (pPrev)
+     {
+         /* Ref-counting funny business: "duplicate" (addref) the child, because
+-         * the free(pPrev) below can cause the ref count to become negative.
++         * enumContext will "close" (release) it assuming we no longer keep
++         * a reference to it.
++         * It will be actually freed in free(pPrev) if needed.
+          */
+         child = Context_GetLinkedContext(pPrev, contextSize);
+         contextInterface->duplicate(child);
+@@ -246,7 +248,7 @@ static void *CRYPT_CollectionEnumCert(PWINECRYPT_CERTSTORE store, void *pPrev)
+     }
+     LeaveCriticalSection(&cs->cs);
+     if (ret)
+-        ((PCERT_CONTEXT)ret)->hCertStore = store;
++        ((PCERT_CONTEXT)ret)->hCertStore = CertDuplicateStore(store);
+     TRACE("returning %p\n", ret);
+     return ret;
+ }
+@@ -548,7 +550,7 @@ BOOL WINAPI CertAddStoreToCollection(HCERTSTORE hCollectionStore,
+     entry = CryptMemAlloc(sizeof(WINE_STORE_LIST_ENTRY));
+     if (entry)
+     {
+-        InterlockedIncrement(&sibling->ref);
++        CertDuplicateStore(sibling);
+         TRACE("sibling %p's ref count is %d\n", sibling, sibling->ref);
+         entry->store = sibling;
+         entry->dwUpdateFlags = dwUpdateFlags;
+diff --git a/dlls/crypt32/context.c b/dlls/crypt32/context.c
+index bf4ccf3..f40b9a5 100644
+--- a/dlls/crypt32/context.c
++++ b/dlls/crypt32/context.c
+@@ -107,36 +107,6 @@ void Context_AddRef(void *context, size_t contextSize)
+ 
+     InterlockedIncrement(&baseContext->ref);
+     TRACE("%p's ref count is %d\n", context, baseContext->ref);
+-    if (baseContext->type == ContextTypeLink)
+-    {
+-        void *linkedContext = Context_GetLinkedContext(context, contextSize);
+-        PBASE_CONTEXT linkedBase = BASE_CONTEXT_FROM_CONTEXT(linkedContext,
+-         contextSize);
+-
+-        /* Add-ref the linked contexts too */
+-        while (linkedContext && linkedBase->type == ContextTypeLink)
+-        {
+-            InterlockedIncrement(&linkedBase->ref);
+-            TRACE("%p's ref count is %d\n", linkedContext, linkedBase->ref);
+-            linkedContext = Context_GetLinkedContext(linkedContext,
+-             contextSize);
+-            if (linkedContext)
+-                linkedBase = BASE_CONTEXT_FROM_CONTEXT(linkedContext,
+-                 contextSize);
+-            else
+-                linkedBase = NULL;
+-        }
+-        if (linkedContext)
+-        {
+-            /* It's not a link context, so it wasn't add-ref'ed in the while
+-             * loop, so add-ref it here.
+-             */
+-            linkedBase = BASE_CONTEXT_FROM_CONTEXT(linkedContext,
+-             contextSize);
+-            InterlockedIncrement(&linkedBase->ref);
+-            TRACE("%p's ref count is %d\n", linkedContext, linkedBase->ref);
+-        }
+-    }
+ }
+ 
+ void *Context_GetExtra(const void *context, size_t contextSize)
+@@ -177,15 +147,6 @@ BOOL Context_Release(void *context, size_t contextSize,
+         ERR("%p's ref count is %d\n", context, base->ref);
+         return FALSE;
+     }
+-    if (base->type == ContextTypeLink)
+-    {
+-        /* The linked context is of the same type as this, so release
+-         * it as well, using the same offset and data free function.
+-         */
+-        ret = Context_Release(CONTEXT_FROM_BASE_CONTEXT(
+-         ((PLINK_CONTEXT)base)->linked, contextSize), contextSize,
+-         dataContextFree);
+-    }
+     if (InterlockedDecrement(&base->ref) == 0)
+     {
+         TRACE("freeing %p\n", context);
+@@ -194,6 +155,16 @@ BOOL Context_Release(void *context, size_t contextSize,
+             ContextPropertyList_Free(((PDATA_CONTEXT)base)->properties);
+             dataContextFree(context);
+         }
++        else // if (base->type == ContextTypeLink)
++        {
++            /* The linked context is of the same type as this, so release
++             * it as well, using the same offset and data free function.
++             */
++            ret = Context_Release(CONTEXT_FROM_BASE_CONTEXT(
++             ((PLINK_CONTEXT)base)->linked, contextSize), contextSize,
++             dataContextFree);
++        }
++
+         CryptMemFree(context);
+     }
+     else
+@@ -201,6 +172,27 @@ BOOL Context_Release(void *context, size_t contextSize,
+     return ret;
+ }
+ 
++BOOL Context_Release2(void *context, size_t contextSize,
++ ContextFreeFunc contextFree)
++{
++    PBASE_CONTEXT base = BASE_CONTEXT_FROM_CONTEXT(context, contextSize);
++    BOOL ret = TRUE;
++
++    if (base->ref <= 0)
++    {
++        ERR("%p's ref count is %d\n", context, base->ref);
++        return FALSE;
++    }
++    if (InterlockedDecrement(&base->ref) == 0)
++    {
++        TRACE("freeing %p\n", context);
++        contextFree(context);
++        CryptMemFree(context);
++    }
++    else
++        TRACE("%p's ref count is %d\n", context, base->ref);
++}
++
+ void Context_CopyProperties(const void *to, const void *from,
+  size_t contextSize)
+ {
+diff --git a/dlls/crypt32/crypt32_private.h b/dlls/crypt32/crypt32_private.h
+index ea85cbc..99952d3 100644
+--- a/dlls/crypt32/crypt32_private.h
++++ b/dlls/crypt32/crypt32_private.h
+@@ -365,14 +365,21 @@ void Context_AddRef(void *context, size_t contextSize) DECLSPEC_HIDDEN;
+ 
+ typedef void (*ContextFreeFunc)(void *context);
+ 
+-/* Decrements context's ref count.  If context is a link context, releases its
+- * linked context as well.
++/* Decrements context's ref count.  If a link context has its ref count reach 0,
++ * releases its linked context as well.
+  * If a data context has its ref count reach 0, calls dataContextFree on it.
+  * Returns FALSE if the reference count is <= 0 when called.
+  */
+ BOOL Context_Release(void *context, size_t contextSize,
+  ContextFreeFunc dataContextFree) DECLSPEC_HIDDEN;
+ 
++/* Decrements context's ref count.  If the context has its ref count reach 0,
++ * calls ContextFreeFunc on it.
++ * Returns FALSE if the reference count is <= 0 when called.
++ */
++
++BOOL Context_Release2(void *, size_t, ContextFreeFunc) DECLSPEC_HIDDEN;
++
+ /**
+  *  Context property list functions
+  */
+diff --git a/dlls/crypt32/store.c b/dlls/crypt32/store.c
+index b540e61..a880dfd 100644
+--- a/dlls/crypt32/store.c
++++ b/dlls/crypt32/store.c
+@@ -1205,20 +1205,37 @@ PCCRL_CONTEXT WINAPI CertEnumCRLsInStore(HCERTSTORE hCertStore,
+     return ret;
+ }
+ 
++/* Some certificates stored in the Provider Store are pointing to memStore.
++ * Other are pointing to the Provider Store itself. The total ref count on
++ * all object is still the same. The memStore's ref count is the one used for
++ * keeping the ref count of all objects.
++ * All calls to Duplicate or Close to provStore will be forwarded to the
++ * memstore inside it.
++ */
++struct WINECRYPT_PROVSTORE {
++    WINECRYPT_CERTSTORE hdr;
++    DWORD padding;
++    PWINECRYPT_CERTSTORE memStore;
++};
++
+ HCERTSTORE WINAPI CertDuplicateStore(HCERTSTORE hCertStore)
+ {
+     WINECRYPT_CERTSTORE *hcs = hCertStore;
+ 
+     TRACE("(%p)\n", hCertStore);
+ 
+-    if (hcs && hcs->dwMagic == WINE_CRYPTCERTSTORE_MAGIC)
++    if (hcs && hcs->dwMagic == WINE_CRYPTCERTSTORE_MAGIC) {
++        if (hcs->type == StoreTypeProvider) {
++            hcs = ((struct WINECRYPT_PROVSTORE *) hcs)->memStore;
++        }
+         InterlockedIncrement(&hcs->ref);
++    }
+     return hCertStore;
+ }
+ 
+ BOOL WINAPI CertCloseStore(HCERTSTORE hCertStore, DWORD dwFlags)
+ {
+-    WINECRYPT_CERTSTORE *hcs = hCertStore;
++    WINECRYPT_CERTSTORE *hcs = hCertStore, *orig = NULL;
+ 
+     TRACE("(%p, %08x)\n", hCertStore, dwFlags);
+ 
+@@ -1228,12 +1245,22 @@ BOOL WINAPI CertCloseStore(HCERTSTORE hCertStore, DWORD dwFlags)
+     if ( hcs->dwMagic != WINE_CRYPTCERTSTORE_MAGIC )
+         return FALSE;
+ 
++    if (hcs->type == StoreTypeProvider) {
++        orig = hcs;
++        hcs = ((struct WINECRYPT_PROVSTORE *) orig)->memStore;
++    }
++
+     if (hcs->ref <= 0)
+         ERR("%p's ref count is %d\n", hcs, hcs->ref);
+     if (InterlockedDecrement(&hcs->ref) == 0)
+     {
+         TRACE("%p's ref count is 0, freeing\n", hcs);
+-        hcs->dwMagic = 0;
++        if (orig) { // this is a prov store and it should be freed now
++            hcs->ref = 1;
++            hcs = orig;
++            hcs->ref = 0;
++        }
++        hcs->dwMagic = 0; // otherwise FreeCert will trigger CloseStore again
+         hcs->closeStore(hcs, dwFlags);
+     }
+     else
+diff --git a/dlls/secur32/schannel_gnutls.c b/dlls/secur32/schannel_gnutls.c
+index 96fb471..740bc20 100644
+--- a/dlls/secur32/schannel_gnutls.c
++++ b/dlls/secur32/schannel_gnutls.c
+@@ -322,9 +322,15 @@ SECURITY_STATUS schan_imp_get_session_peer_certificate(schan_imp_session session
+     gnutls_session_t s = (gnutls_session_t)session;
+     unsigned int list_size;
+     const gnutls_datum_t *datum;
++    int i;
++    HCERTSTORE temp_store;
++    DWORD err;
+ 
+     datum = pgnutls_certificate_get_peers(s, &list_size);
+-    if (datum)
++    if (!datum)
++        return SEC_E_INTERNAL_ERROR;
++
++    if (list_size == 1) // No intermediate certificates
+     {
+         *cert = CertCreateCertificateContext(X509_ASN_ENCODING, datum->data,
+                                              datum->size);
+@@ -333,8 +339,27 @@ SECURITY_STATUS schan_imp_get_session_peer_certificate(schan_imp_session session
+         else
+             return SEC_E_OK;
+     }
+-    else
+-        return SEC_E_INTERNAL_ERROR;
++
++    temp_store = CertOpenStore(CERT_STORE_PROV_MEMORY, 0, NULL, 0, NULL);
++
++    if (!temp_store)
++        return GetLastError();
++
++    TRACE("Temporary certificate store %p created\n", temp_store);
++    for (i = 0; i < list_size; i++)
++        if (!CertAddEncodedCertificateToStore(temp_store,
++                X509_ASN_ENCODING, datum[i].data, datum[i].size,
++                CERT_STORE_ADD_REPLACE_EXISTING, i ? NULL : cert))
++           goto out_free_store;
++
++    CertCloseStore(temp_store, 0);
++
++    return SEC_E_OK;
++
++out_free_store:
++    err = GetLastError();
++    CertCloseStore(temp_store, CERT_CLOSE_STORE_FORCE_FLAG);
++    return err;
+ }
+ 
+ SECURITY_STATUS schan_imp_send(schan_imp_session session, const void *buffer,

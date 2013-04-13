@@ -1,0 +1,160 @@
+diff --git dlls/winex11.drv/opengl.c dlls/winex11.drv/opengl.c
+index 566ee65..822ae02 100644
+--- dlls/winex11.drv/opengl.c
++++ dlls/winex11.drv/opengl.c
+@@ -2253,32 +2253,94 @@ static void WINAPI X11DRV_wglGetIntegerv(GLenum pname, GLint* params)
+     wine_tsx11_unlock();
+ }
+ 
++struct mask_children_param
++{
++    Pixmap mask;
++    GC gc;
++    HWND hwnd;
++};
++
++BOOL CALLBACK mask_children(HWND hwnd, LPARAM lparam)
++{
++    if (!IsWindowVisible(hwnd)) {
++        return TRUE;
++    }
++
++    struct mask_children_param *p = (struct mask_children_param *)lparam;
++    RECT r;
++
++    GetWindowRect(hwnd, &r);
++    MapWindowPoints(NULL, p->hwnd, (POINT *)&r, 2);
++
++    wine_tsx11_lock();
++
++    XFillRectangle(gdi_display, p->mask, p->gc, r.left, r.top, r.right - r.left, r.bottom - r.top);
++    wine_tsx11_unlock();
++
++    return TRUE;
++}
++
+ void flush_gl_drawable(X11DRV_PDEVICE *physDev)
+ {
+     int w, h;
+     RECT rect;
+ 
++    wine_tsx11_lock();
++
+     if (!physDev->gl_copy || !physDev->current_pf)
++    {
++        wine_tsx11_unlock();
+         return;
++    }
+ 
+     w = physDev->dc_rect.right - physDev->dc_rect.left;
+     h = physDev->dc_rect.bottom - physDev->dc_rect.top;
+ 
+     if(w > 0 && h > 0) {
+         Drawable src = physDev->pixmap;
++
++        struct mask_children_param p;
++        Pixmap mask;
++        HWND hwnd;
++        GC gc;
++
+         if(!src) src = physDev->gl_drawable;
+ 
+         /* The GL drawable may be lagged behind if we don't flush first, so
+          * flush the display make sure we copy up-to-date data */
+-        wine_tsx11_lock();
+         XFlush(gdi_display);
++
++        mask = XCreatePixmap(gdi_display, root_window, w, h, 1);
++        gc = XCreateGC(gdi_display, mask, 0, NULL);
++        XSetForeground(gdi_display, gc, 1);
++        XFillRectangle(gdi_display, mask, gc, 0, 0, w, h);
++        XSetForeground(gdi_display, gc, 0);
++
++        wine_tsx11_unlock();
++
++        hwnd = WindowFromDC(physDev->dev.hdc);
++        p.mask = mask;
++        p.gc = gc;
++        p.hwnd = hwnd;
++        EnumChildWindows(hwnd, mask_children, (LPARAM)&p);
++
++        wine_tsx11_lock();
++
++        XFreeGC(gdi_display, gc);
++        XSetClipMask(gdi_display, physDev->gc, mask);
++
+         XSetFunction(gdi_display, physDev->gc, GXcopy);
+         XCopyArea(gdi_display, src, physDev->drawable, physDev->gc, 0, 0, w, h,
+                   physDev->dc_rect.left, physDev->dc_rect.top);
+-        wine_tsx11_unlock();
++
++        XSetClipMask(gdi_display, physDev->gc, None);
++        XFreePixmap(gdi_display, mask);
++
+         SetRect( &rect, 0, 0, w, h );
+         add_device_bounds( physDev, &rect );
+     }
++
++    wine_tsx11_unlock();
+ }
+ 
+ 
+@@ -3849,8 +3911,8 @@ BOOL X11DRV_SwapBuffers(PHYSDEV dev)
+   else
+       pglXSwapBuffers(gdi_display, drawable);
+ 
+-  flush_gl_drawable(physDev);
+   wine_tsx11_unlock();
++  flush_gl_drawable(physDev);
+ 
+   /* FPS support */
+   if (TRACE_ON(fps))
+diff --git dlls/winex11.drv/window.c dlls/winex11.drv/window.c
+index 30593a9..fc3a4b7 100644
+--- dlls/winex11.drv/window.c
++++ dlls/winex11.drv/window.c
+@@ -554,14 +554,15 @@ static BOOL set_win_format( HWND hwnd, XID fbconfig_id )
+             client = create_client_window( display, data, vis );
+             TRACE( "re-created client window %lx for %p fbconfig %lx\n", client, data->hwnd, fbconfig_id );
+         }
++        if (client) goto done;
+         wine_tsx11_lock();
+         XFree(vis);
+         XFlush( display );
+         wine_tsx11_unlock();
+-        if (client) goto done;
+         return FALSE;
+     }
+ 
++    done:
+     w = data->client_rect.right - data->client_rect.left;
+     h = data->client_rect.bottom - data->client_rect.top;
+ 
+@@ -640,7 +641,6 @@ static BOOL set_win_format( HWND hwnd, XID fbconfig_id )
+           data->gl_drawable, fbconfig_id);
+     SetPropA(hwnd, gl_drawable_prop, (HANDLE)data->gl_drawable);
+ 
+-done:
+     data->fbconfig_id = fbconfig_id;
+     SetPropA(hwnd, fbconfig_id_prop, (HANDLE)data->fbconfig_id);
+     /* force DCE invalidation */
+@@ -2279,7 +2279,7 @@ void CDECL X11DRV_GetDC( HDC hdc, HWND hwnd, HWND top, const RECT *win_rect,
+     {
+         escape.fbconfig_id = data ? data->fbconfig_id : (XID)GetPropA( hwnd, fbconfig_id_prop );
+         /* GL draws to the client area even for window DCs */
+-        escape.gl_drawable = data ? data->client_window : X11DRV_get_client_window( hwnd );
++        escape.gl_drawable = data ? data->gl_drawable : (Drawable)GetPropA( hwnd, gl_drawable_prop );
+         if (data && IsIconic( hwnd ) && data->icon_window)
+         {
+             escape.drawable = data->icon_window;
+@@ -2287,7 +2287,9 @@ void CDECL X11DRV_GetDC( HDC hdc, HWND hwnd, HWND top, const RECT *win_rect,
+         else if (flags & DCX_WINDOW)
+             escape.drawable = data ? data->whole_window : X11DRV_get_whole_window( hwnd );
+         else
+-            escape.drawable = escape.gl_drawable;
++            escape.drawable = data ? data->client_window : X11DRV_get_client_window( hwnd );
++
++        escape.gl_copy     = (escape.gl_drawable != 0);
+ 
+         /* special case: when repainting the root window, clip out top-level windows */
+         if (data && data->whole_window == root_window) escape.mode = ClipByChildren;

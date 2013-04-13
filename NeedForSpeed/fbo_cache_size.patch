@@ -1,0 +1,16 @@
+@@ -, +, @@ 
+---
+ dlls/wined3d/wined3d_private.h |    2 +-
+ 1 files changed, 1 insertions(+), 1 deletions(-)
+--- a/dlls/wined3d/wined3d_private.h	
++++ a/dlls/wined3d/wined3d_private.h	
+@@ -962,7 +962,7 @@ enum fogsource {
+     FOGSOURCE_COORD,
+ };
+ 
+-#define WINED3D_MAX_FBO_ENTRIES 64
++#define WINED3D_MAX_FBO_ENTRIES 128
+ 
+ struct wined3d_occlusion_query
+ {
+-- 

@@ -1,0 +1,855 @@
+From d9f855f531726ab19426ee92762e7ad684c3c390 Mon Sep 17 00:00:00 2001
+From: root <root@joe.(none)>
+Date: Sat, 30 Jul 2011 16:50:15 +0200
+Subject: xliveless port
+
+---
+ dlls/xlive/Makefile.in |    6 +
+ dlls/xlive/main.c      |  545 ++++++++++++++++++++++++++++++++++++++++++++++++
+ dlls/xlive/xlive.spec  |  238 +++++++++++++++++++++
+ 3 files changed, 789 insertions(+), 0 deletions(-)
+ create mode 100644 dlls/xlive/Makefile.in
+ create mode 100644 dlls/xlive/main.c
+ create mode 100644 dlls/xlive/xlive.spec
+
+
+diff --git a/configure b/configure
+index 1c453cf..62cc9be 100755
+--- a/configure
++++ b/configure
+@@ -14922,6 +14922,7 @@ wine_fn_config_test dlls/hlink/tests hlink_test
+ wine_fn_config_dll hnetcfg enable_hnetcfg
+ wine_fn_config_dll httpapi enable_httpapi
+ wine_fn_config_dll iccvid enable_iccvid po
++wine_fn_config_dll xlive enable_xlive
+ wine_fn_config_dll icmp enable_icmp
+ wine_fn_config_dll ieframe enable_ieframe implib,po
+ wine_fn_config_test dlls/ieframe/tests ieframe_test
+
+diff --git a/configure.ac b/configure.ac
+index b50d5ed..8c831f6 100644
+--- a/configure.ac
++++ b/configure.ac
+@@ -2388,6 +2388,7 @@ WINE_CONFIG_MAKERULES([dlls/Makedll.rules],[MAKE_DLL_RULES],[Make.rules])
+ WINE_CONFIG_MAKERULES([dlls/Makeimplib.rules],[MAKE_IMPLIB_RULES],[Make.rules])
+ WINE_CONFIG_MAKERULES([programs/Makeprog.rules],[MAKE_PROG_RULES],[Make.rules])
+ 
++WINE_CONFIG_DLL(xlive)
+ WINE_CONFIG_DLL(acledit)
+ WINE_CONFIG_DLL(aclui,,[implib])
+ WINE_CONFIG_DLL(activeds,,[implib])
+
+diff --git a/dlls/xlive/Makefile.in b/dlls/xlive/Makefile.in
+new file mode 100644
+index 0000000..7dc4efd
+--- /dev/null
++++ b/dlls/xlive/Makefile.in
+@@ -0,0 +1,6 @@
++MODULE    = xlive.dll
++
++C_SRCS = \
++	main.c
++
++@MAKE_DLL_RULES@
+diff --git a/dlls/xlive/main.c b/dlls/xlive/main.c
+new file mode 100644
+index 0000000..ff4e56a
+--- /dev/null
++++ b/dlls/xlive/main.c
+@@ -0,0 +1,549 @@
++/*
++ * Copyright 2010 Austin English
++ *
++ * This library is free software; you can redistribute it and/or
++ * modify it under the terms of the GNU Lesser General Public
++ * License as published by the Free Software Foundation; either
++ * version 2.1 of the License, or (at your option) any later version.
++ *
++ * This library is distributed in the hope that it will be useful,
++ * but WITHOUT ANY WARRANTY; without even the implied warranty of
++ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the GNU
++ * Lesser General Public License for more details.
++ *
++ * You should have received a copy of the GNU Lesser General Public
++ * License along with this library; if not, write to the Free Software
++ * Foundation, Inc., 51 Franklin St, Fifth Floor, Boston, MA 02110-1301, USA
++ */
++
++
++#include "config.h"
++
++#include <stdarg.h>
++
++#include "windef.h"
++#include "winbase.h"
++#include "wine/debug.h"
++
++typedef struct USER_READ_PROFILE_SETTINGS {
++	DWORD	dwLength;
++	BYTE *	pSettings;
++} XUSER_READ_PROFILE_SETTINGS;
++
++typedef struct sFakeProtectedBuffer {
++	DWORD	dwMagick;	
++	DWORD	dwSize;
++	DWORD	__fill[2]; /* To match buffer size in Rick's wrapper */
++	BYTE	bData[4];
++}FakeProtectedBuffer;
++
++WINE_DEFAULT_DEBUG_CHANNEL(xlive);
++
++BOOL WINAPI DllMain(HINSTANCE hinstDLL, DWORD fdwReason, LPVOID lpvReserved)
++{
++    TRACE("(0x%p, %d, %p)\n", hinstDLL, fdwReason, lpvReserved);
++
++    switch (fdwReason)
++    {
++        case DLL_WINE_PREATTACH:
++            return FALSE;    /* prefer native version */
++        case DLL_PROCESS_ATTACH:
++            DisableThreadLibraryCalls(hinstDLL);
++            break;
++        case DLL_PROCESS_DETACH:
++            break;
++    }
++
++    return TRUE;
++}
++
++
++
++/* This DLL is completely undocumented. DLL ordinal functions were found using winedump
++   and number of parameters determined using python ctypes. See http://docs.python.org/library/ctypes.html */
++
++INT WINAPI XLIVE_651(DWORD unknown, DWORD unknown2, DWORD unknown3, DWORD unknown4)
++{
++    /*very verbose*/
++    WARN("stub: %d %d %d %d\n", unknown, unknown2, unknown3, unknown4);
++    return 0;
++}
++
++INT WINAPI XLIVE_652(DWORD unknown)
++{
++    FIXME("stub: %d\n", unknown);
++    return 0;
++}
++
++INT WINAPI XLIVE_5000(DWORD unknown)
++{
++    FIXME("stub: %d\n", unknown);
++    return 0;
++}
++
++/*Potentially a cdecl
++ #5001: XLiveInput*/
++
++INT WINAPI XLiveInput (DWORD * p) {
++	FIXME("XLiveInput\n");
++	p[5] = 0;
++	return 1;	// -1 ?
++}
++
++INT WINAPI XLIVE_5002(void)
++{
++    //very very verbose
++    WARN("stub\n");
++    return 0;
++}
++
++INT WINAPI XLIVE_5030(DWORD unknown)
++{
++    FIXME("stub: %d\n", unknown);
++    return 0;
++}
++
++/* from xliveless */
++
++/* Called when trying to save a game.*/
++INT WINAPI XLIVE_5263(DWORD dwUserId, char *pBuffer, DWORD dwBufLen)
++{
++    FIXME("stub: %d %s %d\n", dwUserId, pBuffer, dwBufLen);
++    /*Native returns 21 for me when called with '1,2,3'
++     Needed for save games, I think.
++    */
++     if (dwBufLen < 8)
++        return 1;
++     
++    FIXME("RETURNIN USERNAME\n");
++    memcpy (pBuffer, "Player1", 8);
++    return 0;
++}
++
++
++
++INT WINAPI XLIVE_5270(DWORD unknown, DWORD unknown2)
++{
++    FIXME("stub: %d %d\n", unknown, unknown2);
++    //return (HANDLE) 1;/*return any nonzero value*/
++    return (HANDLE) 1;
++}
++
++INT WINAPI XLIVE_5310(void)
++{
++    FIXME("stub\n");
++    return 0;
++}
++
++/*JoeFix FROM XLIVELESS*/
++
++/* #5297: XLiveInitializeEx */
++INT WINAPI XLiveInitializeEx (void * pXii, DWORD dwVersion) {
++	FIXME("XLiveInitializeEx\n");
++	return 0;
++}
++/* #51 XNetStartup(XNetStartupParams *)*/
++INT WINAPI XNetStartup (void * par) { 
++	FIXME ("XNetStartup\n");
++	return 0;
++}
++
++
++/* #5008: XHVCreateEngine */
++INT WINAPI XHVCreateEngine (DWORD  dw1, DWORD dw2, void ** ppEngine) { 
++	FIXME ("XHVCreateEngine\n");
++    if (ppEngine)
++        *ppEngine = NULL;
++	return -1;	// disable live voice   
++}
++
++/* #5261: XUserGetXUID */
++INT WINAPI XUserGetXUID (DWORD dw1, DWORD * pXuid) {
++        FIXME ("XUserGetXUID\n"); 
++	pXuid[0] = pXuid[1] = 0x10001001; 
++	return 0; // ???
++}
++/* #5262: XUserGetSigninState */
++INT WINAPI  XUserGetSigninState (DWORD dwUserIndex) {
++	FIXME ("xlive_5262: XUserGetSigninState (%d)\n", dwUserIndex);
++	return 1; /*eXUserSigninState_SignedInLocally*/
++}
++
++/* #38: XSocketNTOHS */
++INT WINAPI XSocketNTOHS (WORD n) {	
++	return ((n&0xFF00) >> 8)|((n&0xFF) << 8);
++}
++/* #5360: XLiveContentCreateEnumerator */
++INT WINAPI XLiveContentCreateEnumerator (DWORD dw1 , void * void1 , DWORD *pchBuffer, HANDLE * phContent) {
++	FIXME ("XLiveContentCreateEnumerator\n");
++	if (phContent)
++		*phContent = INVALID_HANDLE_VALUE;
++	return 1;   /* error */
++}
++
++/* #5314: XUserMuteListQuery */
++INT WINAPI XUserMuteListQuery (DWORD dw1, DWORD dw2, DWORD dw3, DWORD dw4) { 
++	FIXME ("XUserMuteListQuery\n");
++	return 0; 
++}
++/*#5313 UNKNOWN*/
++INT WINAPI XUnknown1 (DWORD dw1) { 
++	FIXME ("XUnknown1\n");
++	return 0; 
++}
++
++/* #5007: XLiveOnResetDevice */
++INT WINAPI XLiveOnResetDevice (DWORD dw1) {
++	FIXME ("XLiveOnResetDevice\n");
++	return 0;
++}
++
++/* #5031 XLiveSetDebugLevel */
++INT WINAPI XLiveSetDebugLevel (DWORD xdlLevel, DWORD * pxdlOldLevel) { 
++	FIXME ("XLiveSetDebugLevel (%d)\n", xdlLevel);
++	return 0;
++}
++
++/* #84: XNetSetSystemLinkPort */
++INT WINAPI XNetSetSystemLinkPort (DWORD dw) {
++        FIXME("XNetSetSystemLinkPort");
++	return 0; 
++}
++
++/* #5324: XOnlineGetNatType */
++INT WINAPI  XOnlineGetNatType (void) { 
++	FIXME ("XOnlineGetNatType\n");
++	return 0; 
++}
++
++
++
++/* #5331: XUserReadProfileSettings*/
++INT WINAPI XUserReadProfileSettings (DWORD dwTitleId, DWORD dwUserIndex, DWORD dwNumSettingIds, 
++					DWORD * pdwSettingIds, DWORD * pcbResults, XUSER_READ_PROFILE_SETTINGS * pResults, DWORD pOverlapped) {
++	FIXME ("XUserReadProfileSettings (%d, %d, %d, ..., %d, ...)\n", dwTitleId, dwUserIndex, dwNumSettingIds, *pcbResults);
++	if (*pcbResults < 1036) {
++		*pcbResults = 1036;	/* TODO: make correct calculation by IDs.*/
++                FIXME("RETURNING INSUFFICENT BUFFER\n");
++		return ERROR_INSUFFICIENT_BUFFER;
++	}
++	memset (pResults, 0, *pcbResults);
++	pResults->dwLength = *pcbResults-sizeof (XUSER_READ_PROFILE_SETTINGS);
++	pResults->pSettings = (BYTE *)pResults+sizeof (XUSER_READ_PROFILE_SETTINGS);
++	return 0;
++}
++
++/* #5264: XUserAreUsersFriends*/
++INT WINAPI XUserAreUsersFriends(DWORD dwUserIndex, DWORD * pXuids, DWORD dwXuidCount, DWORD * pResult, void * pOverlapped) {
++	FIXME ("XUserAreUsersFriends\n");
++    /*return ERROR_NOT_LOGGED_ON;*/
++    return 0;
++}
++
++/* #5265: XUserCheckPrivilege*/
++INT WINAPI XUserCheckPrivilege (DWORD user, DWORD priv, PBOOL b) {
++	FIXME ("XUserCheckPrivilege (%d, %d, ..)\n", user, priv);
++	*b = 1;
++	return 0;
++}
++/* #5312: XFriendsCreateEnumerator*/
++INT WINAPI XFriendsCreateEnumerator (DWORD dw1, DWORD dw2, DWORD dw3 , DWORD dw4, HANDLE * phEnum) { 
++	FIXME ("XFriendsCreateEnumerator\n");
++	*phEnum = INVALID_HANDLE_VALUE;
++	return 0; 
++}
++/* #5256: XEnumerate*/
++INT WINAPI XEnumerate (HANDLE hEnum, void * pvBuffer, DWORD cbBuffer, DWORD * pcItemsReturned, void * pOverlapped) {
++	FIXME ("XEnumerate (buffer=> %p[%d])\n", pvBuffer, cbBuffer);
++    if (pvBuffer && cbBuffer) 
++        memset (pvBuffer, 0, cbBuffer);
++	if (pcItemsReturned)
++		*pcItemsReturned = 0;
++	return ERROR_NO_MORE_FILES;	/* some error ? */
++}
++/* #5251: XCloseHandle*/
++INT WINAPI XCloseHandle (DWORD dw1) {
++	FIXME ("XCloseHandle\n");
++	return 0;
++}
++/* #5280: XUserCreateAchievementEnumerator */
++INT WINAPI XUserCreateAchievementEnumerator (DWORD dwTitleId, DWORD dwUserIndex, DWORD xuidL, DWORD xuidHi, DWORD dwDetailFlags, DWORD dwStartingIndex, DWORD cItem, DWORD * pcbBuffer, HANDLE * phEnum) {
++	FIXME ("XUserCreateAchievementEnumerator (dwStartingIndex=>%d, cItem=>%d \n", dwStartingIndex, cItem);
++    if (pcbBuffer)
++        *pcbBuffer = 0;
++    if (phEnum)
++	    *phEnum = INVALID_HANDLE_VALUE;
++	return 1;   /* return error (otherwise, 0-size buffer will be allocated) */
++}
++/* #5292: XUserSetContextEx */
++INT WINAPI XUserSetContextEx (DWORD dwUserIndex, DWORD dwContextId, DWORD dwContextValue, void * pOverlapped) {
++	FIXME ("XUserSetContextEx\n");
++	return 0;
++}
++/* #5293: XUserSetPropertyEx*/
++INT WINAPI XUserSetPropertyEx (DWORD dwUserIndex, DWORD dwPropertyId, DWORD cbValue, void * pvValue, void * pOverlapped) { 
++	FIXME ("XUserSetPropertyEx (%d, 0x%x, ...)\n", dwUserIndex, dwPropertyId);
++	return 0;
++}
++/* #5277: XUserSetContext*/
++INT WINAPI XUserSetContext (DWORD dw1, DWORD dw2, DWORD dw3) {
++        FIXME ("XUserSetContext\n");
++	return 0;
++}
++/* #1082: XGetOverlappedExtendedError */
++INT WINAPI XGetOverlappedExtendedError (void * void1) { 
++	FIXME ("XGetOverlappedExtendedError\n");
++	return 1;
++}
++
++/* #5337: XUserWriteProfileSettings */
++INT WINAPI XUserWriteProfileSettings (DWORD dw1, DWORD dw2, DWORD dw3, DWORD dw4) {
++	FIXME ("XUserWriteProfileSettings\n");
++	return 0;
++}
++/* #5005: XLiveOnCreateDevice */
++INT WINAPI XLiveOnCreateDevice (DWORD dw1, DWORD dw2) {
++	FIXME ("XLiveOnCreateDevice\n");
++	return 0;
++}
++/* #5372 */
++INT WINAPI xlive_5372 (HANDLE han , DWORD dw1, DWORD dw2, DWORD dw3, BYTE * bi, HANDLE han2) {
++    FIXME ("xlive_5372\n");
++    return 1;
++}
++/*5339: XUserReadProfileSettingsByXuid*/
++INT WINAPI XUserReadProfileSettingsByXuid (DWORD dw1, DWORD dw2, DWORD dw3, DWORD dw4,DWORD dw5, DWORD dw6,DWORD dw7, DWORD dw8,DWORD dw9) {
++	FIXME ("XUserReadProfileSettingsByXuid\n");
++	return 0;
++}
++/* #5036: XLiveCreateProtectedDataContext*/
++INT WINAPI XLiveCreateProtectedDataContext (DWORD * dwType, PHANDLE pHandle) {
++	FIXME ("XLiveCreateProtectedDataContext\n");
++	if (pHandle) {
++		*pHandle = (HANDLE)1;
++                FIXME("Creating PROTE TEDDATACONTEXT\n");
++        }
++	return 0;
++}
++/* #5016: XLivePBufferAllocate */
++INT WINAPI XLivePBufferAllocate (int size, FakeProtectedBuffer ** pBuffer) {
++	FIXME ("xlive_5016: XLivePBufferAllocate (%d)\n", size);
++	*pBuffer = (FakeProtectedBuffer *)malloc (size+16);
++	if (!*pBuffer) {
++		FIXME ("ERROR: XLivePBufferAllocate unable to allocate %d bytes\n", size);
++		return E_OUTOFMEMORY;
++	}
++
++	(*pBuffer)->dwMagick = 0xDEADDEAD;	// some arbitrary number
++	(*pBuffer)->dwSize = size;
++	return 0;
++}
++/* #5335: XTitleServerCreateEnumerator*/
++INT WINAPI XTitleServerCreateEnumerator (LPCSTR pszServerInfo, DWORD cItem, DWORD * pcbBuffer, PHANDLE phEnum) {
++         FIXME ("XTitleServerCreateEnumerator (cItem=> %d)\n", cItem);
++	*phEnum = INVALID_HANDLE_VALUE;
++	return 1;
++}
++/* #5034: XLiveProtectData */
++INT WINAPI XLiveProtectData (BYTE * pInBuffer, DWORD dwInDataSize, BYTE * pOutBuffer, DWORD * pDataSize, HANDLE h) {
++	FIXME ("XLiveProtectData (...  %d, ...,%d %d)\n", dwInDataSize,*pDataSize, (DWORD)h);
++         *pDataSize = dwInDataSize;
++	if (*pDataSize >= dwInDataSize && pOutBuffer) {
++         FIXME("PROTECTING DATA\n");
++         memcpy (pOutBuffer, pInBuffer, dwInDataSize);
++        }
++	return 0;
++}
++/* #5038: XLiveCloseProtectedDataContext */
++INT WINAPI XLiveCloseProtectedDataContext (HANDLE h) {
++	FIXME ("XLiveCloseProtectedDataContext\n");
++	return 0;
++}
++/* #5035: XLiveUnprotectData */
++INT WINAPI XLiveUnprotectData (BYTE * pInBuffer, DWORD dwInDataSize, BYTE * pOutBuffer, DWORD * pDataSize, HANDLE * ph) {
++	FIXME ("XLiveUnprotectData (..., %d, ..., %d, %d)\n", dwInDataSize, *pDataSize, *(DWORD*)ph);
++	if (!pDataSize || !ph)	/* invalid parameter */
++		return E_FAIL;
++	*ph = (HANDLE)1;
++	//if (dwInDataSize > 12)
++	//	dwInDataSize = 12;	/* RF:G workaround  breaks batman arkham asylum*/
++	if (!pOutBuffer || *pDataSize < dwInDataSize) {
++		*pDataSize = dwInDataSize;
++		return ERROR_INSUFFICIENT_BUFFER;
++	}
++        FIXME("UNPROTECTING DATA\n");
++	*pDataSize = dwInDataSize;
++	memcpy (pOutBuffer, pInBuffer, dwInDataSize);
++	return 0;
++}
++/* #5311: XOnlineCleanup */
++INT WINAPI XOnlineCleanup (void) {
++	FIXME ("XOnlineCleanup\n");
++	return 0;
++}
++/* #5003: XLiveUninitialize */
++INT WINAPI XLiveUninitialize (void) { 
++	FIXME ("XLiveUninitialize\n");
++	return 0;
++}
++/* #5006: XShowMessagesUI*/
++INT WINAPI XShowMessagesUI (DWORD dwUserIndex) {
++    FIXME("XShowMessagesUI");
++    return 1;   /* ERROR_NOT_LOGGED_ON */
++}
++/* #52: XNetCleanup */
++INT WINAPI XNetCleanup (void) { 
++	FIXME ("xlive_52: XNetCleanup\n");
++	return 0;
++}
++/* #75: XNetGetEthernetLinkStatus */
++INT WINAPI XNetGetEthernetLinkStatus (void) {
++        FIXME("XNetGetEthernetLinkStatus\n"); 
++	return 1; 
++}
++/* #73: XNetGetTitleXnAddr */
++INT WINAPI XNetGetTitleXnAddr (DWORD * pAddr) {
++	*pAddr = 0x0100007F;	// 127.0.0.1
++	return 4; 
++}
++/* #3: XCreateSocket */
++INT WINAPI XCreateSocket (int af, int type, int protocol) { 
++	FIXME ("XCreateSocket (%d, %d, %d)\n", af, type, protocol);
++	return -1;
++}
++
++/* #7: XSocketSetSockOpt */
++INT WINAPI XSocketSetSockOpt (long sock, DWORD dw1, DWORD dw2, DWORD dw3, DWORD dw4) {
++	FIXME("XSocketSetSockOpt\n");
++	return 0;
++}
++
++/* #6: XSocketIOCTLSocket */
++INT WINAPI XSocketIOCTLSocket (long sock, long cmd, long * argp) {
++	FIXME ("XSocketIOCTLSocket\n");
++	return 0;
++}
++/* #1083: XGetOverlappedResult */
++INT WINAPI XGetOverlappedResult (void * parm1, DWORD * pResult, DWORD bWait) { 
++	if (pResult)
++		*pResult = 0;	/* 0 elements enumerated */
++	FIXME ("XGetOverlappedResult\n");
++	return 0;
++}
++/* #5259: XLiveSignin */
++INT WINAPI XLiveSignin (PWSTR pszLiveIdName, PWSTR pszLiveIdPassword, DWORD dwFlags, void * pOverlapped) {
++    return S_OK;
++}
++
++typedef struct USER_SIGNIN_INFO {
++   DWORD	xuidL;
++   DWORD	xuidH;
++   DWORD        dwInfoFlags;
++   DWORD	UserSigninState;
++   DWORD        dwGuestNumber;
++   DWORD        dwSponsorUserIndex;
++   CHAR         szUserName[16];
++} XUSER_SIGNIN_INFO;
++
++typedef struct PWSADATA {
++         long wVersion;
++} LPWSADATA;
++
++
++/* #5267: XUserGetSigninInfo */
++INT WINAPI XUserGetSigninInfo (DWORD dwUser, DWORD dwFlags, XUSER_SIGNIN_INFO * pInfo) {  
++        FIXME ("XUserGetSigninInfo (%d, %d, ...)\n", dwUser, dwFlags);
++	pInfo->xuidL = pInfo->xuidH = dwFlags != 1 ? (dwUser+1)*0x10001001 : 0; /* some arbitrary id for offline user, INVALID_XUID for online user*/
++	if (dwFlags != 1) {
++		pInfo->dwInfoFlags = 1;
++		pInfo->UserSigninState = 1; /* eXUserSigninState_SignedInLocally*/
++		strcpy (pInfo->szUserName, "Player1");
++	}
++	return 0;
++}
++/*#5028 UNKNOWN*/
++INT WINAPI XUnknown5028 (DWORD dw1) { 
++	FIXME ("XUnknown1\n");
++	return 0; 
++}
++/* #1: XWSAStartup */
++INT WINAPI XWSAStartup (WORD wVersionRequested, long lpsadata) { 
++	//lpWsaData->wVersion = 2;
++	FIXME ("XWSAStartup \n");
++	return 0;
++}
++/* #5037: XLiveQueryProtectedDataInformation */
++INT WINAPI XLiveQueryProtectedDataInformation (HANDLE h, DWORD * p) {
++	FIXME ("XLiveQueryProtectedDataInformation\n");
++	return 0;
++}
++/* #2: XWSACleanup */
++void WINAPI  XWSACleanup (void) {	// XWSACleanup
++	FIXME ("XWSACleanup\n");
++}
++/* #26: XSocketInet_Addr */
++INT WINAPI XSocketInet_Addr (char * addr) { 
++	FIXME ("XSocketInet_Addr\n");
++	return 0;
++}
++/* #78: XNetGetOpt */
++INT WINAPI XNetGetOpt (DWORD dwOptId, BYTE * pValue, DWORD * pdwValueSize) {
++    FIXME("XNetGetOpt\n");
++    return WSAEINVAL;
++}
++/* #5019: XLivePBufferSetByte */
++INT WINAPI XLivePBufferSetByte (FakeProtectedBuffer * pBuffer, DWORD offset, BYTE value) {
++
++        FIXME("XLivePBufferSetByte\n");
++	if (!pBuffer || pBuffer->dwMagick != 0xDEADDEAD   || offset > pBuffer->dwSize)
++		return 0;
++	pBuffer->bData[offset] = value;
++	return 0;
++}
++/* #5021: XLivePBufferSetDWORD */
++INT WINAPI XLivePBufferSetDWORD (FakeProtectedBuffer * pBuffer, DWORD dwOffset, DWORD dwValue ) {
++        FIXME("XLivePBufferSetDWORD\n");
++	if (!pBuffer || pBuffer->dwMagick != 0xDEADDEAD  || dwOffset > pBuffer->dwSize-4)
++		return 0;
++	*(DWORD *)(pBuffer->bData+dwOffset) = dwValue;
++	return 0;
++}
++/* #5348: XLiveProtectedCreateFile */ 
++INT WINAPI XLiveProtectedCreateFile (HANDLE hContentAccess, void * pvReserved, PCWSTR pszFilePath, 
++    DWORD dwDesiredAccess, DWORD dwShareMode, SECURITY_ATTRIBUTES * pSecurityAttributes, DWORD dwCreationDisposition, DWORD dwFlagsAndAttributes, HANDLE * phModule) {
++        
++        HANDLE h = INVALID_HANDLE_VALUE; // CreateFileW (pszFilePath, dwDesiredAccess, dwShareMode, pSecurityAttributes, dwCreationDisposition, dwFlagsAndAttributes, NULL);
++        if (phModule)
++            *phModule = h;
++        // return h != INVALID_HANDLE_VALUE ? S_OK : 1;    /* error code */
++        return 1;
++}
++
++INT WINAPI XUnknown5282 (void)
++  
++{
++FIXME ("XliveUnknown5282\n");
++return 0;
++}
++
++INT WINAPI XUnknown83 (void)
++  
++{
++FIXME ("XliveUnknown83\n");
++
++return 0;
++}
++
++// #40: XSocketHTONS 
++INT WINAPI XSocketHTONS (WORD n) {
++        FIXME("XSocketHTONS\n");
++	return ((n&0xFF00) >> 8)|((n&0xFF) << 8);
++}
++
++// #5278: XUserWriteAchievements
++INT WINAPI XUserWriteAchievements (DWORD a, DWORD b, DWORD c) {
++       FIXME ("XUserWriteAchievements\n");
++       return 0;
++} 
++
++
+diff --git a/dlls/xlive/xlive.spec b/dlls/xlive/xlive.spec
+new file mode 100644
+index 0000000..3a1346f
+--- /dev/null
++++ b/dlls/xlive/xlive.spec
+@@ -0,0 +1,238 @@
++1 stdcall -noname XWSAStartup (long long)
++2 stdcall -noname XWSACleanup()
++3 stdcall -noname XCreateSocket (long long long)
++4 stub -noname @
++5 stub -noname @
++6 stdcall -noname XSocketIOCTLSocket(long long long)
++7 stdcall -noname XSocketSetSockOpt(long long long)
++8 stub -noname @
++9 stub -noname @
++10 stub -noname @
++11 stub -noname @
++12 stub -noname @
++13 stub -noname @
++14 stub -noname @
++15 stub -noname @
++16 stub -noname @
++17 stub -noname @
++18 stub -noname @
++19 stub -noname @
++20 stub -noname @
++21 stub -noname @
++22 stub -noname @
++23 stub -noname @
++24 stub -noname @
++25 stub -noname @
++26 stdcall -noname XSocketInet_Addr (long)
++27 stub -noname @
++28 stub -noname @
++29 stub -noname @
++30 stub -noname @
++31 stub -noname @
++32 stub -noname @
++33 stub -noname @
++34 stub -noname @
++35 stub -noname @
++37 stub -noname @
++38 stdcall -noname XSocketNTOHS (long)
++39 stub -noname @
++40 stdcall -noname XSocketHTONS(long)
++51 stdcall -noname XNetStartup(long)
++52 stdcall -noname XNetCleanup ()
++53 stub -noname @
++54 stub -noname @
++55 stub -noname @
++56 stub -noname @
++57 stub -noname @
++58 stub -noname @
++60 stub -noname @
++62 stub -noname @
++63 stub -noname @
++64 stub -noname @
++65 stub -noname @
++66 stub -noname @
++67 stub -noname @
++68 stub -noname @
++69 stub -noname @
++70 stub -noname @
++71 stub -noname @
++72 stub -noname @
++73 stdcall -noname XNetGetTitleXnAddr(long)
++75 stdcall -noname XNetGetEthernetLinkStatus()
++76 stub -noname @
++77 stub -noname @
++78 stdcall -noname XNetGetOpt (long long long)
++79 stub -noname @
++81 stub -noname @
++82 stub -noname @
++83 stdcall -noname XUnknown83()
++84 stdcall -noname XNetSetSystemLinkPort (long)
++472 stub -noname @
++473 stub -noname @
++474 stub -noname @
++476 stub -noname @
++477 stub -noname @
++478 stub -noname @
++479 stub -noname @
++651 stdcall -noname XLIVE_651(long long long long)
++652 stdcall -noname XLIVE_652()
++653 stub -noname @
++1082 stdcall -noname XGetOverlappedExtendedError (long)
++1083 stdcall -noname XGetOverlappedResult (long long long)
++5000 stdcall -noname XLIVE_5000(long)
++# Not sure if cdecl, check with vpovirk
++5001 stdcall -noname XLiveInput(long)
++5002 stdcall -noname XLIVE_5002()
++5003 stdcall -noname XLiveUninitialize()
++5005 stdcall -noname XLiveOnCreateDevice (long long)
++5006 stdcall -noname XShowMessagesUI(long)
++5007 stdcall -noname XLiveOnResetDevice ( long )
++5008 stdcall -noname XHVCreateEngine (long long long)
++5010 stub -noname @
++5011 stub -noname @
++5012 stub -noname @
++5016 stdcall -noname XLivePBufferAllocate (long long)
++5017 stub -noname @
++5018 stub -noname @
++5019 stdcall -noname XLivePBufferSetByte (long long long)
++5020 stub -noname @
++5021 stdcall -noname XLivePBufferSetDWORD (long long long)
++5022 stub -noname @
++5023 stub -noname @
++5024 stub -noname @
++5025 stub -noname @
++5026 stub -noname @
++5027 stub -noname @
++5028 stdcall -noname XUnknown5028 (long)
++5029 stub -noname @
++5030 stdcall -noname XLIVE_5030(long)
++5031 stdcall -noname XLiveSetDebugLevel (long long)
++5032 stub -noname @
++5034 stdcall -noname XLiveProtectData (long long long long long)
++5035 stdcall -noname XLiveUnprotectData (long long long long long)
++5036 stdcall -noname XLiveCreateProtectedDataContext (long long)
++5037 stdcall -noname XLiveQueryProtectedDataInformation (long long)
++5038 stdcall -noname XLiveCloseProtectedDataContext(long)
++5039 stub -noname @
++5206 stub -noname @
++5208 stub -noname @
++5209 stub -noname @
++5210 stub -noname @
++5212 stub -noname @
++5214 stub -noname @
++5215 stub -noname @
++5216 stub -noname @
++5230 stub -noname @
++5231 stub -noname @
++5233 stub -noname @
++5234 stub -noname @
++5235 stub -noname @
++5236 stub -noname @
++5237 stub -noname @
++5238 stub -noname @
++5250 stub -noname @
++5251 stdcall -noname XCloseHandle (long)
++5252 stub -noname @
++5254 stub -noname @
++5255 stub -noname @
++5256 stdcall -noname XEnumerate (long long long long long)
++5257 stub -noname @
++5258 stub -noname @
++5259 stdcall -noname XLiveSignin (long long long long)
++5260 stub -noname @
++5261 stdcall -noname XUserGetXUID (long long)
++5262 stdcall -noname XUserGetSigninState (long)
++5263 stdcall -noname XLIVE_5263(long long long)
++5264 stdcall -noname XUserAreUsersFriends (long long long long)
++5265 stdcall -noname XUserCheckPrivilege (long long long) 
++5266 stub -noname @
++5267 stdcall -noname XUserGetSigninInfo(long long long)
++5270 stdcall -noname XLIVE_5270(long long)
++5271 stub -noname @
++5273 stub -noname @
++5274 stub -noname @
++5275 stub -noname @
++5276 stub -noname @
++5277 stdcall -noname XUserSetContext (long long long)
++5278 stdcall -noname XUserWriteAchievements (long long long)
++5279 stub -noname @
++5280 stdcall -noname XUserCreateAchievementEnumerator(long long long long long long long long long)
++5281 stub -noname @
++5282 stdcall -noname XUnknown5282()
++5284 stub -noname @
++5285 stub -noname @
++5286 stub -noname @
++5287 stub -noname @
++5288 stub -noname @
++5289 stub -noname @
++5290 stub -noname @
++5291 stub -noname @
++5292 stdcall -noname XUserSetContextEx(long long long long)
++5293 stdcall -noname XUserSetPropertyEx(long long long long long)
++5294 stub -noname @
++5295 stub -noname @
++5296 stub -noname @
++5297 stdcall -noname  XLiveInitializeEx(long long) 
++5298 stub -noname @
++5299 stub -noname @
++5300 stub -noname @
++5303 stub -noname @
++5304 stub -noname @
++5305 stub -noname @
++5306 stub -noname @
++5307 stub -noname @
++5308 stub -noname @
++5309 stub -noname @
++5310 stdcall -noname XLIVE_5310()
++5311 stdcall -noname XOnlineCleanup()
++5312 stdcall -noname XFriendsCreateEnumerator (long long long long long)
++5313 stdcall -noname XUnknown1 ( long )
++5314 stdcall -noname XUserMuteListQuery (long long long long)
++5315 stub -noname @
++5316 stub -noname @
++5317 stub -noname @
++5318 stub -noname @
++5319 stub -noname @
++5320 stub -noname @
++5321 stub -noname @
++5322 stub -noname @
++5323 stub -noname @
++5324 stdcall -noname XOnlineGetNatType()
++5325 stub -noname @
++5326 stub -noname @
++5327 stub -noname @
++5328 stub -noname @
++5329 stub -noname @
++5330 stub -noname @
++5331 stdcall -noname XUserReadProfileSettings(long long long long long long long long)
++5332 stub -noname @
++5333 stub -noname @
++5334 stub -noname @
++5335 stdcall -noname XTitleServerCreateEnumerator (long long long long)
++5336 stub -noname @
++5337 stdcall -noname XUserWriteProfileSettings (long long long long)
++5338 stub -noname @
++5339 stdcall -noname XUserReadProfileSettingsByXuid(long long long long long long long long long)
++5340 stub -noname @
++5341 stub -noname @
++5342 stub -noname @
++5343 stub -noname @
++5344 stub -noname @
++5345 stub -noname @
++5346 stub -noname @
++5347 stub -noname @
++5348 stdcall-noname XLiveProtectedCreateFile (long long long long long long long long)
++5349 stub -noname @
++5350 stub -noname @
++5351 stub -noname @
++5352 stub -noname @
++5354 stub -noname @
++5355 stub -noname @
++5356 stub -noname @
++5357 stub -noname @
++5358 stub -noname @
++5359 stub -noname @
++5360 stdcall -noname XLiveContentCreateEnumerator( long long long)
++5361 stub -noname @
++5365 stub -noname @
++5372 stdcall -noname xlive_5372 (long long long long long long)
+-- 
+1.7.4.4
+

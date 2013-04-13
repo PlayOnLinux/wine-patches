@@ -1,0 +1,30 @@
+diff --git a/dlls/kernel32/file.c b/dlls/kernel32/file.c
+index 089f693..1365c71 100644
+--- a/dlls/kernel32/file.c
++++ b/dlls/kernel32/file.c
+@@ -352,6 +352,25 @@ BOOL WINAPI ReadFileEx(HANDLE hFile, LPVOID buffer, DWORD bytesToRead,
+     status = NtReadFile(hFile, NULL, FILE_ReadWriteApc, lpCompletionRoutine,
+                         io_status, buffer, bytesToRead, &offset, NULL);
+ 
++    if (status == STATUS_PENDING)
++    {
++        TRACE("force wait 100ms\n");
++        if (WaitForSingleObject( overlapped->hEvent ? overlapped->hEvent : hFile, 100 ) != WAIT_FAILED)
++        {
++            status = io_status->u.Status;
++            TRACE("new status %d\n", status);
++            if(status == STATUS_PENDING)
++            {
++                status = overlapped->Internal;
++                TRACE("new status 2 %d\n", status);
++	         return TRUE;
++            }
++        }
++        else
++            TRACE("extra wait failed\n");
++    }
++
+     if (status)
+     {
+         SetLastError( RtlNtStatusToDosError(status) );
+

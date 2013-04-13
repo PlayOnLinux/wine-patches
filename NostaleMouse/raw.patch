@@ -1,0 +1,924 @@
+diff --git a/dlls/user32/Makefile.in b/dlls/user32/Makefile.in
+index d2cdc92..7fd804e 100644
+--- a/dlls/user32/Makefile.in
++++ b/dlls/user32/Makefile.in
+@@ -1,7 +1,7 @@
+ EXTRADEFS = -D_USER32_ -D_WINABLE_
+ MODULE    = user32.dll
+ IMPORTLIB = user32
+-IMPORTS   = gdi32 version advapi32
++IMPORTS   = gdi32 version advapi32 dinput8 dinput dxguid
+ DELAYIMPORTS = imm32
+ 
+ C_SRCS = \
+diff --git a/dlls/user32/input.c b/dlls/user32/input.c
+index 06553a4..a8ed77e 100644
+--- a/dlls/user32/input.c
++++ b/dlls/user32/input.c
+@@ -22,6 +22,15 @@
+  * Foundation, Inc., 51 Franklin St, Fifth Floor, Boston, MA 02110-1301, USA
+  */
+ 
++/*
++ * Updated by Vincas Miliūnas 2011
++ * Modififed by Reco 2009
++ * patch is based on
++ * http://win2kgaming.site90.com/phpBB2/viewtopic.php?f=6&t=7
++ * OldCigarettes Windows 2000 XP API Wrapper Pack
++ * Released under LGPL
++ */
++
+ #include "config.h"
+ #include "wine/port.h"
+ 
+@@ -48,6 +57,383 @@
+ #include "wine/server.h"
+ #include "wine/debug.h"
+ #include "wine/unicode.h"
++#include "dinput.h"
++
++
++static HANDLE hHeap = NULL;
++
++typedef struct _myNode
++{
++    DWORD data;
++    struct _myNode * next;
++} myNode;
++
++typedef struct
++{
++    myNode * head;
++    myNode * tail;
++    long length;
++    HANDLE lockMutex;
++} myList;
++
++
++__inline void GetLock(myList * l)
++{
++    WaitForSingleObject(l->lockMutex, INFINITE);
++}
++
++__inline void ReleaseLock(myList * l)
++{
++    ReleaseMutex(l->lockMutex);
++}
++
++
++__inline void InitializeList(myList ** l)
++{
++    *l = HeapAlloc(hHeap, 0, sizeof(myList));
++    (*l)->head = NULL;
++    (*l)->tail = NULL;
++    (*l)->length = 0;
++    (*l)->lockMutex = CreateMutexA(NULL, FALSE, NULL);
++}
++
++
++__inline void PushFrontByAddr(myList * l, myNode * nouv)
++{
++    if(!l->head)
++        l->tail = nouv;
++
++    nouv->next = l->head;
++    l->head = nouv;
++    l->length++;
++}
++
++__inline void PushBackByAddr(myList * l, myNode * nouv)
++{
++    if(!l->head)
++    {
++        nouv->next = NULL;
++        l->tail = nouv;
++        l->head = nouv;
++    }
++    else
++    {
++        nouv->next = NULL;
++        l->tail->next = nouv;
++        l->tail = nouv;
++    }
++    l->length++;
++}
++
++__inline void PushFrontByVal(myList * l, DWORD data)
++{
++    myNode * nouv = NULL;
++    nouv = HeapAlloc(hHeap, 0, sizeof(myNode));
++    nouv->next = l->head;
++    nouv->data = data;
++
++    if(!l->head)
++        l->tail = nouv;
++
++    l->head = nouv;
++    l->length++;
++}
++
++__inline void PushBackByVal(myList * l, DWORD data)
++{
++    myNode * nouv = NULL;
++    nouv = HeapAlloc(hHeap, 0, sizeof(myNode));
++    nouv->data = data;
++
++    if(!l->head)
++    {
++        nouv->next = NULL;
++        l->tail = nouv;
++        l->head = nouv;
++    }
++    else
++    {
++        nouv->next = NULL;
++        l->tail->next = nouv;
++        l->tail = nouv;
++    }
++    l->length++;
++}
++
++__inline void RemoveNodeByVal(myList * l, DWORD data)
++{
++    myNode * temp = NULL;
++    myNode * cour = NULL;
++    myNode ** prec = NULL;
++
++    cour = l->head;
++    prec = &l->head;
++
++    while(cour)
++    {
++        if(cour->data == data)
++        {
++            temp = cour->next;
++
++            HeapFree(hHeap, 0, cour);
++
++            *prec = temp;
++            cour = temp;
++            l->length--;
++        }
++        else
++        {
++            prec = &(cour->next);
++            cour = cour->next;
++        }
++    }
++}
++
++__inline void RemoveNodeByAddr(myList * l, myNode * node)
++{
++    myNode * temp = NULL;
++    myNode * cour = NULL;
++    myNode ** prec = NULL;
++
++    cour = l->head;
++    prec = &l->head;
++
++    while(cour)
++    {
++        if(cour == node)
++        {
++            temp = cour->next;
++
++            HeapFree(hHeap, 0, cour);
++
++            *prec = temp;
++            cour = temp;
++            l->length--;
++        }
++        else
++        {
++            prec = &(cour->next);
++            cour = cour->next;
++        }
++    }
++}
++
++
++__inline DWORD PopFrontAndFree(myList * l)
++{
++    myNode * res = NULL;
++	DWORD data = 0;
++
++    if(l->head && l->head == l->tail)
++    {
++        res = l->head;
++        l->head = NULL;
++        l->tail = NULL;
++        l->length = 0;
++    }
++    else if(l->head)
++    {
++        res = l->head;
++        l->head = res->next;
++        l->length--;
++    }
++
++	//win2000 finds bug here!!!!
++
++    if(res) {
++		data = res->data;
++        HeapFree(hHeap, 0, res);
++	}
++
++	return data;
++}
++
++
++__inline void PopBackAndFree(myList * l)
++{
++    myNode *res = NULL, *cour = NULL, *prec = NULL;
++
++    if(l->head && l->head == l->tail)
++    {
++        res = l->head;
++        l->head = NULL;
++        l->tail = NULL;
++        l->length = 0;
++    }
++    else if(l->tail)
++    {
++        cour = l->head;
++        prec = l->head;
++        while(cour->next)
++        {
++            prec = cour;
++            cour = cour->next;
++        }
++
++        res = l->tail;
++        l->tail = prec;
++        l->length--;
++    }
++
++    if(res)
++        HeapFree(hHeap, 0, res);
++}
++
++
++
++__inline myNode * PopFront(myList * l)
++{
++    myNode * res = NULL;
++
++    if(l->head && l->head == l->tail)
++    {
++        res = l->head;
++        l->head = NULL;
++        l->tail = NULL;
++        l->length = 0;
++    }
++    else if(l->head)
++    {
++        res = l->head;
++        l->head = res->next;
++        l->length--;
++    }
++
++    return res;
++}
++
++
++__inline myNode * PopBack(myList * l)
++{
++    myNode *res = NULL, *cour = NULL, *prec = NULL;
++
++    if(l->head && l->head == l->tail)
++    {
++        res = l->head;
++        l->head = NULL;
++        l->tail = NULL;
++        l->length = 0;
++    }
++    else if(l->tail)
++    {
++        cour = l->head;
++        prec = l->head;
++        while(cour->next)
++        {
++            prec = cour;
++            cour = cour->next;
++        }
++
++        res = l->tail;
++        prec->next = NULL;
++        l->tail = prec;
++        l->length--;
++    }
++
++    return res;
++}
++
++
++__inline BOOL IsInListByVal(myList * l, DWORD data)
++{
++    myNode * cour = NULL;
++    BOOL found = FALSE;
++
++    cour = l->head;
++    while(cour && !found)
++    {
++        found = (cour->data == data);
++        cour = cour->next;
++    }
++
++    return found;
++}
++
++
++__inline BOOL IsInListByAddr(myList * l, myNode * node)
++{
++    myNode * cour = NULL;
++    BOOL found = FALSE;
++
++    cour = l->head;
++    while(cour && !found)
++    {
++        found = (cour == node);
++        cour = cour->next;
++    }
++
++    return found;
++}
++
++
++__inline void FreeList(myList ** l)
++{
++    while((*l)->length)
++        PopFrontAndFree(*l);
++
++    CloseHandle((*l)->lockMutex);
++    HeapFree(hHeap, 0, *l);
++    *l = NULL;
++}
++
++/*Mode select*/
++BOOL UseDirectInput = TRUE;
++
++/*List of raw input data for each window*/
++static myList * rawMouseInputWindowList    = NULL;
++static myList * rawKeyboardInputWindowList = NULL;
++static myList * rawInputHandleList         = NULL;
++
++/*HOOK HANDLES*/
++static HHOOK rawInputMouseHook    = NULL;
++static HHOOK rawInputKeyboardHook = NULL;
++static BOOL  mouseFirstRun        = TRUE;
++
++//X,Y coords to create relative movement of mouse from low level hook
++static LONG mouseHookLastX = 0, mouseHookLastY = 0;
++
++/*DirectInput data*/
++LPDIRECTINPUT8A         lpdi            = NULL;
++LPDIRECTINPUTDEVICE8A   m_mouse         = NULL;
++LPDIRECTINPUTDEVICE8A   m_keyboard      = NULL;
++HANDLE                 mouseInputEvent = NULL;
++
++BOOL                   b_registered_mouse;
++BOOL                   b_registered_keyboard;
++RAWINPUTDEVICE         rid_mouse;
++RAWINPUTDEVICE         rid_keyboard;
++
++//Only keep so many rawinput structures
++#define RAWINPUTHANDLETABLESIZE     32
++
++#define RIM_TYPEMOUSE        0
++#define RIM_INPUT          0x00000000
++#define MOUSE_MOVE_RELATIVE      0x00000000
++#define MOUSE_MOVE_ABSOLUTE      0x00000001
++#define MOUSE_VIRTUAL_DESKTOP	 0x00000002
++#define RI_MOUSE_LEFT_BUTTON_DOWN  0x0001
++#define RI_MOUSE_LEFT_BUTTON_UP    0x0002
++#define RI_MOUSE_RIGHT_BUTTON_DOWN 0x0004
++#define RI_MOUSE_RIGHT_BUTTON_UP 0x0008
++#define RI_MOUSE_MIDDLE_BUTTON_DOWN  0x0010
++#define RI_MOUSE_MIDDLE_BUTTON_UP  0x0020
++#define RI_MOUSE_BUTTON_1_DOWN     RI_MOUSE_LEFT_BUTTON_DOWN
++#define RI_MOUSE_BUTTON_1_UP   RI_MOUSE_LEFT_BUTTON_UP
++#define RI_MOUSE_BUTTON_2_DOWN   RI_MOUSE_RIGHT_BUTTON_DOWN
++#define RI_MOUSE_BUTTON_2_UP   RI_MOUSE_RIGHT_BUTTON_UP
++#define RI_MOUSE_BUTTON_3_DOWN   RI_MOUSE_MIDDLE_BUTTON_DOWN
++#define RI_MOUSE_BUTTON_3_UP   RI_MOUSE_MIDDLE_BUTTON_UP
++#define RI_MOUSE_BUTTON_4_DOWN   0x0040
++#define RI_MOUSE_BUTTON_4_UP   0x0080
++#define RI_MOUSE_BUTTON_5_DOWN   0x0100
++#define RI_MOUSE_BUTTON_5_UP   0x0200
++#define RI_MOUSE_WHEEL       0x0400
++#define RIDEV_INPUTSINK        0x00000100
++#define MOUSE_DEVICE_HANDLE      0x1337
++#define RID_INPUT 0x10000003
++#define RID_HEADER 0x10000005
++#define RIDEV_REMOVE 0x00000001
++#define RIDEV_CAPTUREMOUSE 0x00000200
+ 
+ WINE_DEFAULT_DEBUG_CHANNEL(win);
+ WINE_DECLARE_DEBUG_CHANNEL(keyboard);
+@@ -490,30 +876,439 @@ UINT WINAPI GetRawInputDeviceList(PRAWINPUTDEVICELIST pRawInputDeviceList, PUINT
+     return 0;
+ }
+ 
++void SetRawInputMouseHeader(RAWINPUT *ri) {
++	ri->header.dwType = RIM_TYPEMOUSE;
++    ri->header.dwSize = sizeof(RAWINPUT);
++    ri->header.hDevice = MOUSE_DEVICE_HANDLE;
++    ri->header.wParam = RIM_INPUT;
++	return;
++}
++
++RAWINPUT *GetDirectInputMouseData() {
++	static DIMOUSESTATE2 mouse_state;
++	static DIMOUSESTATE2 mouse_state_prev;
++	RAWINPUT *raw;
++	HRESULT hr;
++	int i;
++
++	raw = (RAWINPUT*)HeapAlloc(hHeap, 0, sizeof(RAWINPUT));
++	SetRawInputMouseHeader(raw);
++
++	//Try to get input, and maybe reaquire input
++	hr = m_mouse->lpVtbl->GetDeviceState(m_mouse, sizeof(DIMOUSESTATE2), (LPVOID)&mouse_state);
++	if(FAILED(hr)) {
++		m_mouse->lpVtbl->Acquire(m_mouse);
++		while(hr == DIERR_INPUTLOST) {
++			hr = m_mouse->lpVtbl->Acquire(m_mouse);
++		}
++		if(FAILED(hr)) {
++			HeapFree(hHeap, 0, raw);
++			return NULL;
++		}
++		m_mouse->lpVtbl->GetDeviceState(m_mouse, sizeof(DIMOUSESTATE2), (LPVOID)&mouse_state);
++	}
++
++	raw->data.mouse.usFlags = MOUSE_MOVE_RELATIVE;
++	raw->data.mouse.lLastX = mouse_state.lX;
++	raw->data.mouse.lLastY = mouse_state.lY;
++	raw->data.mouse.usButtonData = mouse_state.lZ & 0xFFFF;
++	raw->data.mouse.usButtonFlags = 0;
++	raw->data.mouse.ulRawButtons = 0;
++
++	if(raw->data.mouse.usButtonData != 0) raw->data.mouse.usButtonFlags |= RI_MOUSE_WHEEL;
++
++	for(i = 0; i < 8; i++) {
++		if(mouse_state.rgbButtons[i] & 0x80) {
++			raw->data.mouse.ulRawButtons |= 1<<i;
++		}
++	}
++
++	if(mouse_state.rgbButtons[0] & 0x80 && !(mouse_state_prev.rgbButtons[0] & 0x80))
++		raw->data.mouse.usButtonFlags |= RI_MOUSE_LEFT_BUTTON_DOWN;
++
++	if(!(mouse_state.rgbButtons[0] & 0x80) && mouse_state_prev.rgbButtons[0] & 0x80)
++		raw->data.mouse.usButtonFlags |= RI_MOUSE_LEFT_BUTTON_UP;
++
++	if(mouse_state.rgbButtons[1] & 0x80 && !(mouse_state_prev.rgbButtons[1] & 0x80))
++		raw->data.mouse.usButtonFlags |= RI_MOUSE_RIGHT_BUTTON_DOWN;
++
++	if(!(mouse_state.rgbButtons[1] & 0x80) && mouse_state_prev.rgbButtons[1] & 0x80)
++		raw->data.mouse.usButtonFlags |= RI_MOUSE_RIGHT_BUTTON_UP;
++
++	if(mouse_state.rgbButtons[2] & 0x80 && !(mouse_state_prev.rgbButtons[2] & 0x80))
++		raw->data.mouse.usButtonFlags |= RI_MOUSE_MIDDLE_BUTTON_DOWN;
++
++	if(!(mouse_state.rgbButtons[2] & 0x80) && mouse_state_prev.rgbButtons[2] & 0x80)
++		raw->data.mouse.usButtonFlags |= RI_MOUSE_MIDDLE_BUTTON_UP;
++
++	if(mouse_state.rgbButtons[3] & 0x80 && !(mouse_state_prev.rgbButtons[3] & 0x80))
++		raw->data.mouse.usButtonFlags |= RI_MOUSE_BUTTON_4_DOWN;
++
++	if(!(mouse_state.rgbButtons[3] & 0x80) && mouse_state_prev.rgbButtons[3] & 0x80)
++		raw->data.mouse.usButtonFlags |= RI_MOUSE_BUTTON_4_UP;
++
++	if(mouse_state.rgbButtons[4] & 0x80 && !(mouse_state_prev.rgbButtons[4] & 0x80))
++		raw->data.mouse.usButtonFlags |= RI_MOUSE_BUTTON_5_DOWN;
++
++	if(!(mouse_state.rgbButtons[4] & 0x80) && mouse_state_prev.rgbButtons[4] & 0x80)
++		raw->data.mouse.usButtonFlags |= RI_MOUSE_BUTTON_5_UP;
++
++	memcpy(&mouse_state_prev, &mouse_state, sizeof(DIMOUSESTATE2));
++
++	return raw;
++}
++
++VOID AddRawInputToWindowList(RAWINPUT *ri, myList *windowList) {
++	myNode * cour = NULL;
++	GetLock(rawInputHandleList);
++
++	//Remove old rawinputs
++	if(rawInputHandleList && rawInputHandleList->length > RAWINPUTHANDLETABLESIZE)
++		HeapFree(hHeap, 0, (RAWINPUT *)PopFrontAndFree(rawInputHandleList));
++
++	//Add this new RAWINPUT
++    PushBackByVal(rawInputHandleList, (DWORD)ri);
++
++    GetLock(windowList);
++    for(cour = windowList->head; cour; cour = cour->next) {
++		PostMessageA((HWND)cour->data, WM_INPUT, RIM_INPUT, (LPARAM)ri);
++    }
++    ReleaseLock(windowList);
++	ReleaseLock(rawInputHandleList);
++	return;
++}
++
++//Mouse and Keyboard seperate just to simplify things a bit
++DWORD WINAPI PollDirectInputMouse(PVOID data) {
++	RAWINPUT *raw;
++	for(;;) {
++		if(WaitForSingleObject(mouseInputEvent, 1000*2) != WAIT_ABANDONED) {
++			raw = GetDirectInputMouseData();
++			if(raw) AddRawInputToWindowList(raw, rawMouseInputWindowList);
++		}
++	}
++	return 0;
++}
++
++BOOL RegisterDirectInputMouse(PRAWINPUTDEVICE pRawInputDevices, HWND hWnd) {
++	HRESULT hr;
++	DWORD flags;
++
++	//Try to map these flags to DirectX
++	flags = 0;
++	if(pRawInputDevices->dwFlags & RIDEV_INPUTSINK) flags |= DISCL_BACKGROUND;
++	else                                            flags |= DISCL_FOREGROUND;
++	flags |= DISCL_NONEXCLUSIVE;
++
++	//Init DirectInput if nessecary
++	if (lpdi == NULL && FAILED(DirectInput8Create(GetModuleHandleA(NULL), DIRECTINPUT_VERSION, &IID_IDirectInput8A, (void**)&lpdi, NULL))) {
++		ERR("user32: Failed to create DirectInput interface\n");
++		return FALSE;
++	}
++
++	//Init MouseDevice if nessecary
++	if (m_mouse == NULL && FAILED(lpdi->lpVtbl->CreateDevice(lpdi, &GUID_SysMouse, &m_mouse, NULL))) {
++		ERR("user32: Failed to create DirectInput mouse device\n");
++		return FALSE;
++	}
++
++	//Make friendly with this hWnd
++	if (FAILED(m_mouse->lpVtbl->SetCooperativeLevel(m_mouse, hWnd, flags))) {
++		ERR("user32: Failed to set cooperative level on DirectInput mouse device\n");
++		return FALSE;
++	}
++
++	if (FAILED(m_mouse->lpVtbl->SetDataFormat(m_mouse, &c_dfDIMouse2))) {
++		ERR("user32: Failed to set data format on DirectInput mouse device\n");
++		return FALSE;
++	}
++
++	if(!mouseInputEvent) {
++		HANDLE handle;
++
++		mouseInputEvent = CreateEventA(NULL, FALSE, FALSE, NULL);
++		if(!mouseInputEvent) {
++			ERR("user32: Failed to create event for DirectInput mouse\n");
++			return FALSE;
++		}
++
++		handle = CreateThread(NULL, 0, PollDirectInputMouse, NULL, 0, NULL);
++		if(!handle) {
++			ERR("user32: Failed to create polling thread for DirectInput mouse\n");
++			return FALSE;
++		}
++
++		if(!SetThreadAffinityMask(handle, 1)) {
++			ERR("user32: Failed to set thread affinity mask for the DirectInput mouse polling thread\n");
++			return FALSE;
++		}
++
++	}
++
++	//Must be NOT be acquired to SetEventNotification
++	m_mouse->lpVtbl->Unacquire(m_mouse);
++	if(FAILED(m_mouse->lpVtbl->SetEventNotification(m_mouse, mouseInputEvent))) {
++		ERR("user32: Failed to SetEventNotification for DirectInput mouse\n");
++		return FALSE;
++	}
++
++	return TRUE;
++}
++
++//SetWindowsHookEx WH_MOUSE_LL handler
++LRESULT CALLBACK myLowLevelMouseProc(int nCode, WPARAM wParam, LPARAM lParam) {
++    static ULONG ulRawButtons = 0;
++    RAWMOUSE *rm = NULL;
++    RAWINPUT *ri = NULL;
++    MSLLHOOKSTRUCT * hs = (MSLLHOOKSTRUCT*)lParam;
++
++    if(nCode == HC_ACTION) { //Should always be true
++        ri = (RAWINPUT*)HeapAlloc(hHeap, 0, sizeof(RAWINPUT));
++        if(ri) {
++			SetRawInputMouseHeader(ri);
++
++            rm = &ri->data.mouse;
++            if(mouseFirstRun) { //first time around give the absolute position
++                rm->usFlags = MOUSE_MOVE_ABSOLUTE;
++                rm->lLastX = hs->pt.x;
++                rm->lLastY = hs->pt.y;
++            } else {
++                rm->usFlags = MOUSE_MOVE_RELATIVE;
++                if(hs->flags & LLMHF_INJECTED) {
++                    rm->lLastX = 0;
++                    rm->lLastY = 0;
++                } else {
++                    rm->lLastX = (LONG)hs->pt.x - mouseHookLastX;
++                    rm->lLastY = (LONG)hs->pt.y - mouseHookLastY;
++                }
++            }
++
++            mouseHookLastX = hs->pt.x;
++            mouseHookLastY = hs->pt.y;
++
++            rm->ulButtons = 0;
++            rm->usButtonData = 0;
++            rm->usButtonFlags = 0;
++            rm->ulExtraInformation = 0;
++
++			//note ulRawButtons is static and we keep track of the state of the buttons this way
++            switch(wParam)
++            {
++                case WM_LBUTTONDOWN:
++                    rm->usButtonFlags |= RI_MOUSE_LEFT_BUTTON_DOWN;
++                    ulRawButtons |= 0x00000001;
++                    break;
++
++                case WM_LBUTTONUP:
++                    rm->usButtonFlags |= RI_MOUSE_LEFT_BUTTON_UP;
++                    ulRawButtons &= ~0x00000001;
++                    break;
++
++                case WM_RBUTTONDOWN:
++                    rm->usButtonFlags |= RI_MOUSE_RIGHT_BUTTON_DOWN;
++                    ulRawButtons |= 0x00000002;
++                    break;
++
++                case WM_RBUTTONUP:
++                    rm->usButtonFlags |= RI_MOUSE_RIGHT_BUTTON_UP;
++                    ulRawButtons &= ~0x00000002;
++                    break;
++
++                case WM_MBUTTONDOWN:
++                    rm->usButtonFlags |= RI_MOUSE_MIDDLE_BUTTON_DOWN;
++                    ulRawButtons |= 0x00000004;
++                    break;
++
++                case WM_MBUTTONUP:
++                    rm->usButtonFlags |= RI_MOUSE_MIDDLE_BUTTON_UP;
++                    ulRawButtons &= ~0x00000004;
++                    break;
++
++                case WM_MOUSEWHEEL:
++                    rm->usButtonFlags |= RI_MOUSE_WHEEL;
++                    rm->usButtonData = HIWORD(hs->mouseData);
++                    break;
++
++				case WM_XBUTTONDOWN:
++					if(HIWORD(hs->mouseData) == XBUTTON1)      rm->usButtonFlags |= RI_MOUSE_BUTTON_4_DOWN;
++					else if(HIWORD(hs->mouseData) == XBUTTON2) rm->usButtonFlags |= RI_MOUSE_BUTTON_5_DOWN;
++					ulRawButtons |= (1 << (HIWORD(hs->mouseData) + 2));
++					break;
++
++				case WM_XBUTTONUP:
++					if(HIWORD(hs->mouseData) == XBUTTON1)      rm->usButtonFlags |= RI_MOUSE_BUTTON_4_UP;
++					else if(HIWORD(hs->mouseData) == XBUTTON2) rm->usButtonFlags |= RI_MOUSE_BUTTON_5_UP;
++					ulRawButtons &= ~(1 << (HIWORD(hs->mouseData) + 2));
++					break;
++            }
++            rm->ulRawButtons = ulRawButtons;
++
++            if(!mouseFirstRun) {
++				AddRawInputToWindowList(ri, rawMouseInputWindowList);
++            } else {
++				mouseFirstRun = FALSE;
++			}
++        }
++    }
++
++    return CallNextHookEx(rawInputMouseHook, nCode, wParam, lParam);
++}
++
++VOID DeRegisterDirectInputMouse() {
++	m_mouse->lpVtbl->Unacquire(m_mouse);
++	m_mouse->lpVtbl->SetEventNotification(m_mouse, NULL);
++}
+ 
+ /******************************************************************
+ *		RegisterRawInputDevices (USER32.@)
+ */
+-BOOL WINAPI DECLSPEC_HOTPATCH RegisterRawInputDevices(PRAWINPUTDEVICE pRawInputDevices, UINT uiNumDevices, UINT cbSize)
+-{
+-    FIXME("(pRawInputDevices=%p, uiNumDevices=%d, cbSize=%d) stub!\n", pRawInputDevices, uiNumDevices, cbSize);
++BOOL WINAPI RegisterRawInputDevices(PRAWINPUTDEVICE pRawInputDevices, UINT uiNumDevices, UINT cbSize) {
++    int i;
++	HWND hWnd;
++
++	hHeap = GetProcessHeap();
++	if(!rawMouseInputWindowList) InitializeList(&rawMouseInputWindowList);
++	if(!rawKeyboardInputWindowList) InitializeList(&rawKeyboardInputWindowList);
++	if(!rawInputHandleList) InitializeList(&rawInputHandleList);
++
++    if(!pRawInputDevices || !uiNumDevices || !cbSize) {
++        SetLastError(ERROR_INVALID_PARAMETER);
++        return FALSE;
++    }
++
++    for(i=0; i<uiNumDevices; i++) {
++		//Get the window handle if we need to
++		hWnd = pRawInputDevices[i].hwndTarget;
++		if(!hWnd) hWnd = GetFocus();
++		if(!hWnd) hWnd = GetForegroundWindow(); //try this too
++		if(!hWnd) {
++			ERR("user32: couldn't get HWND for RegisterRawInputDevices\n");
++			return FALSE;
++		}
++
++        // Mouse input
++        if(pRawInputDevices[i].usUsagePage==1 && pRawInputDevices[i].usUsage==2) { //Mouse should match this
++          GetLock(rawMouseInputWindowList);
++          if(!(pRawInputDevices[i].dwFlags & RIDEV_REMOVE)) {
++				//Add
++				TRACE("user32: Adding a RAWINPUT mouse\n");
++
++                if(pRawInputDevices[i].dwFlags & RIDEV_CAPTUREMOUSE)
++                    SetCapture(hWnd);
++				//Add the hWnd to the list
++                if(!IsInListByVal(rawMouseInputWindowList, (DWORD)hWnd))
++                    PushFrontByVal(rawMouseInputWindowList, (DWORD)hWnd);
++
++				//If not getting low level data yet activate
++				if(UseDirectInput) {
++					if(!RegisterDirectInputMouse(&pRawInputDevices[i], hWnd))
++						ERR("user32: Could not register DirectInput mouse\n");
++                } else if(!rawInputMouseHook) {
++                    rawInputMouseHook = SetWindowsHookExA(WH_MOUSE_LL, myLowLevelMouseProc, GetModuleHandleA("user32.dll"), 0);
++					if(!rawInputMouseHook)
++						ERR("user32: Could not SetWindowsHookEx WH_MOUSE_LL LastError=0x%X\n", GetLastError());
++				}
++				//Save this structure to return with GetRegisteredRawInputDevices
++				b_registered_mouse = TRUE;
++				memcpy(&rid_mouse, &pRawInputDevices[i], sizeof(RAWINPUTDEVICE));
++            } else {
++				//Remove
++				TRACE("user32: Removing a RAWINPUT mouse\n");
++
++                if(pRawInputDevices[i].hwndTarget) {
++					//This actually is not allowed
++                    RemoveNodeByVal(rawMouseInputWindowList, (DWORD)pRawInputDevices[i].hwndTarget);
++                } else {
++					//Remove dem all!
++                    while(rawMouseInputWindowList->length)
++                        PopFrontAndFree(rawMouseInputWindowList);
++                }
++
++                ReleaseCapture();
++
++				if(rawMouseInputWindowList->length==0) {
++					if(UseDirectInput) {
++						DeRegisterDirectInputMouse();
++					} else if(rawInputMouseHook) {
++						UnhookWindowsHookEx(rawInputMouseHook);
++						rawInputMouseHook = NULL;
++					}
++				}
++
++				b_registered_mouse = FALSE;
++            }
++          ReleaseLock(rawMouseInputWindowList);
++        }
++
++    }
+ 
+     return TRUE;
+ }
+ 
+-
+ /******************************************************************
+ *		GetRawInputData (USER32.@)
+ */
+-UINT WINAPI GetRawInputData(HRAWINPUT hRawInput, UINT uiCommand, LPVOID pData, PUINT pcbSize, UINT cbSizeHeader)
+-{
+-    FIXME("(hRawInput=%p, uiCommand=%d, pData=%p, pcbSize=%p, cbSizeHeader=%d) stub!\n",
+-            hRawInput, uiCommand, pData, pcbSize, cbSizeHeader);
++UINT WINAPI GetRawInputData(HRAWINPUT hRawInput, UINT uiCommand, LPVOID pData, PUINT pcbSize, UINT cbSizeHeader) {
++    UINT res = 0;
++    RAWINPUT *ri = (RAWINPUT*)hRawInput;
++
++	if(cbSizeHeader != sizeof(RAWINPUTHEADER)) {
++		ERR("user32: sizeof(RAWINPUTHEADER) does not match expected\n");
++	}
++
++  GetLock(rawInputHandleList);
++
++	//Ain't in the list no more
++    if(!hRawInput || !IsInListByVal(rawInputHandleList, (DWORD)hRawInput)) {
++        ReleaseLock(rawInputHandleList);
++        return ((UINT)-1);
++	}
++
++    if(!pData) {
++        switch(uiCommand) {
++            case RID_INPUT:
++                *pcbSize = sizeof(RAWINPUT);
++                res = 0;
++                break;
++
++            case RID_HEADER:
++                *pcbSize = sizeof(RAWINPUTHEADER);
++                res = 0;
++                break;
++
++            default:
++                *pcbSize = 0;
++                res = (UINT)-1;
++        }
++    } else {
++        switch(uiCommand) {
++            case RID_INPUT:
++                if(*pcbSize >= sizeof(RAWINPUT)) {
++                    res = *pcbSize;
++                    RtlCopyMemory(pData, ri, sizeof(RAWINPUT));
++                } else {
++					res = (UINT)-1;
++				}
++                break;
++
++            case RID_HEADER:
++                if(*pcbSize >= sizeof(RAWINPUTHEADER)) {
++                    res = *pcbSize;
++                    RtlCopyMemory(pData, &ri->header, sizeof(RAWINPUTHEADER));
++                } else {
++					res = (UINT)-1;
++				}
++                break;
++
++            default:
++                res = (UINT)-1;
++        }
++    }
+ 
+-    return 0;
++    ReleaseLock(rawInputHandleList);
++    return res;
+ }
+ 
+-
+ /******************************************************************
+ *		GetRawInputBuffer (USER32.@)
+ */
+@@ -550,11 +1345,36 @@ UINT WINAPI GetRawInputDeviceInfoW(HANDLE hDevice, UINT uiCommand, LPVOID pData,
+ /******************************************************************
+ *		GetRegisteredRawInputDevices (USER32.@)
+ */
+-UINT WINAPI GetRegisteredRawInputDevices(PRAWINPUTDEVICE pRawInputDevices, PUINT puiNumDevices, UINT cbSize)
+-{
+-    FIXME("(pRawInputDevices=%p, puiNumDevices=%p, cbSize=%d) stub!\n", pRawInputDevices, puiNumDevices, cbSize);
+-
+-    return 0;
++UINT WINAPI GetRegisteredRawInputDevices(
++  PRAWINPUTDEVICE pRawInputDevices, PUINT puiNumDevices, UINT cbSize) {
++	UINT nd;
++	if(cbSize != sizeof(RAWINPUTDEVICE)) {
++			ERR("user32: GetRegisteredRawInputDevices expected structure size %d got %d\n",
++				sizeof(RAWINPUTDEVICE), cbSize);
++	}
++
++	//Since we only can the keyboard and mouse there should only ever be two
++	//devices.  This will just return whatever structure they were registered
++	//with in this application.  If you register more than once, you get the last.
++	nd = (b_registered_mouse?1:0) + (b_registered_keyboard?1:0);
++
++	if(nd > *puiNumDevices || !pRawInputDevices) {
++		SetLastError(ERROR_INSUFFICIENT_BUFFER);
++		*puiNumDevices = nd;
++		return -1;
++	}
++
++	if(b_registered_mouse) {
++		memcpy(pRawInputDevices, &rid_mouse, sizeof(RAWINPUTDEVICE));
++		pRawInputDevices = (PRAWINPUTDEVICE)((PBYTE)pRawInputDevices + cbSize);
++	}
++
++	if(b_registered_keyboard) {
++		memcpy(pRawInputDevices, &rid_keyboard, sizeof(RAWINPUTDEVICE));
++	}
++
++	*puiNumDevices = nd;
++	return nd;
+ }
+ 
+ 
+diff --git a/include/winuser.h b/include/winuser.h
+index a8b2c93..393939d 100644
+--- a/include/winuser.h
++++ b/include/winuser.h
+@@ -491,8 +491,8 @@ typedef struct tagRAWMOUSE {
+         struct {
+             USHORT usButtonFlags;
+             USHORT usButtonData;
+-        } DUMMYSTRUCTNAME;
+-    } DUMMYUNIONNAME;
++        };
++    };
+     ULONG ulRawButtons;
+     LONG  lLastX;
+     LONG  lLastY;

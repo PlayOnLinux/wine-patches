@@ -1,0 +1,421 @@
+From bc571511f25ed8320a96c929a2388ae2824cb5ea Mon Sep 17 00:00:00 2001
+From: Alexander Morozov <amorozov@etersoft.ru>
+Date: Sun, 27 May 2012 00:49:54 +0400
+Subject: [PATCH 2/2] Re-generate some files.
+
+---
+ configure                      |  203 ++++++++++++++++++++++++++++++++++++++++
+ include/Makefile.in            |    4 +
+ include/config.h.in            |    9 ++
+ include/wine/server_protocol.h |   18 +++-
+ server/request.h               |    5 +
+ server/trace.c                 |   13 +++
+ 6 files changed, 251 insertions(+), 1 deletion(-)
+
+diff --git a/configure b/configure
+index 0e7c315..5a85b3a 100755
+--- a/configure
++++ b/configure
+@@ -640,6 +640,9 @@ GPHOTO2INCL
+ GPHOTO2LIBS
+ gphoto2port_devel
+ gphoto2_devel
++USBINCL
++USBLIBS
++LIBUDEV
+ SANEINCL
+ sane_devel
+ GNUTLSINCL
+@@ -807,6 +810,8 @@ with_png
+ with_pthread
+ with_sane
+ with_tiff
++with_udev
++with_usb
+ with_v4l
+ with_xcomposite
+ with_xcursor
+@@ -1497,6 +1502,8 @@ Optional Packages:
+   --without-pthread       do not use the pthread library
+   --without-sane          do not use SANE (scanner support)
+   --without-tiff          do not use TIFF
++  --without-udev          do not use libudev
++  --without-usb           do not use USB
+   --without-v4l           do not use v4l1 (v4l support)
+   --without-xcomposite    do not use the Xcomposite extension
+   --without-xcursor       do not use the Xcursor extension
+@@ -2691,6 +2698,18 @@ if test "${with_tiff+set}" = set; then :
+ fi
+ 
+ 
++# Check whether --with-udev was given.
++if test "${with_udev+set}" = set; then :
++  withval=$with_udev;
++fi
++
++
++# Check whether --with-usb was given.
++if test "${with_usb+set}" = set; then :
++  withval=$with_usb;
++fi
++
++
+ # Check whether --with-v4l was given.
+ if test "${with_v4l+set}" = set; then :
+   withval=$with_v4l;
+@@ -10037,6 +10056,190 @@ This is an error since --with-v4l was requested." "$LINENO" 5 ;;
+ esac
+ fi
+ 
++LIBUDEV=""
++
++if test "x$with_udev" != "xno"
++then
++    ac_fn_c_check_header_mongrel "$LINENO" "libudev.h" "ac_cv_header_libudev_h" "$ac_includes_default"
++if test "x$ac_cv_header_libudev_h" = xyes; then :
++  { $as_echo "$as_me:${as_lineno-$LINENO}: checking for udev_new in -ludev" >&5
++$as_echo_n "checking for udev_new in -ludev... " >&6; }
++if ${ac_cv_lib_udev_udev_new+:} false; then :
++  $as_echo_n "(cached) " >&6
++else
++  ac_check_lib_save_LIBS=$LIBS
++LIBS="-ludev  $LIBS"
++cat confdefs.h - <<_ACEOF >conftest.$ac_ext
++/* end confdefs.h.  */
++
++/* Override any GCC internal prototype to avoid an error.
++   Use char because int might match the return type of a GCC
++   builtin and then its argument prototype would still apply.  */
++#ifdef __cplusplus
++extern "C"
++#endif
++char udev_new ();
++int
++main ()
++{
++return udev_new ();
++  ;
++  return 0;
++}
++_ACEOF
++if ac_fn_c_try_link "$LINENO"; then :
++  ac_cv_lib_udev_udev_new=yes
++else
++  ac_cv_lib_udev_udev_new=no
++fi
++rm -f core conftest.err conftest.$ac_objext \
++    conftest$ac_exeext conftest.$ac_ext
++LIBS=$ac_check_lib_save_LIBS
++fi
++{ $as_echo "$as_me:${as_lineno-$LINENO}: result: $ac_cv_lib_udev_udev_new" >&5
++$as_echo "$ac_cv_lib_udev_udev_new" >&6; }
++if test "x$ac_cv_lib_udev_udev_new" = xyes; then :
++
++$as_echo "#define HAVE_LIBUDEV 1" >>confdefs.h
++
++             LIBUDEV="-ludev"
++fi
++
++fi
++
++
++fi
++if test "x$ac_cv_lib_udev_udev_new" = "x"; then :
++  case "x$with_udev" in
++  x)   as_fn_append wine_notices "|libudev ${notice_platform}development files not found, no dynamic USB device support." ;;
++  xno) ;;
++  *)   as_fn_error $? "libudev ${notice_platform}development files not found, no dynamic USB device support.
++This is an error since --with-udev was requested." "$LINENO" 5 ;;
++esac
++fi
++
++USBLIBS=""
++
++USBINCL=""
++
++if test "x$with_usb" != "xno"
++then
++    ac_fn_c_check_header_mongrel "$LINENO" "usb.h" "ac_cv_header_usb_h" "$ac_includes_default"
++if test "x$ac_cv_header_usb_h" = xyes; then :
++  { $as_echo "$as_me:${as_lineno-$LINENO}: checking for usb_init in -lusb" >&5
++$as_echo_n "checking for usb_init in -lusb... " >&6; }
++if ${ac_cv_lib_usb_usb_init+:} false; then :
++  $as_echo_n "(cached) " >&6
++else
++  ac_check_lib_save_LIBS=$LIBS
++LIBS="-lusb  $LIBS"
++cat confdefs.h - <<_ACEOF >conftest.$ac_ext
++/* end confdefs.h.  */
++
++/* Override any GCC internal prototype to avoid an error.
++   Use char because int might match the return type of a GCC
++   builtin and then its argument prototype would still apply.  */
++#ifdef __cplusplus
++extern "C"
++#endif
++char usb_init ();
++int
++main ()
++{
++return usb_init ();
++  ;
++  return 0;
++}
++_ACEOF
++if ac_fn_c_try_link "$LINENO"; then :
++  ac_cv_lib_usb_usb_init=yes
++else
++  ac_cv_lib_usb_usb_init=no
++fi
++rm -f core conftest.err conftest.$ac_objext \
++    conftest$ac_exeext conftest.$ac_ext
++LIBS=$ac_check_lib_save_LIBS
++fi
++{ $as_echo "$as_me:${as_lineno-$LINENO}: result: $ac_cv_lib_usb_usb_init" >&5
++$as_echo "$ac_cv_lib_usb_usb_init" >&6; }
++if test "x$ac_cv_lib_usb_usb_init" = xyes; then :
++
++$as_echo "#define HAVE_LIBUSB 1" >>confdefs.h
++
++             USBLIBS="-lusb"
++fi
++
++fi
++
++
++    ac_save_CPPFLAGS="$CPPFLAGS"
++    if test "$PKG_CONFIG" != "false"
++    then
++        ac_usb_incl="`$PKG_CONFIG --cflags libusb-1.0`"
++        ac_usb_libs="`$PKG_CONFIG --libs libusb-1.0`"
++        CPPFLAGS="$ac_usb_incl $CPPFLAGS"
++    fi
++    ac_fn_c_check_header_mongrel "$LINENO" "libusb.h" "ac_cv_header_libusb_h" "$ac_includes_default"
++if test "x$ac_cv_header_libusb_h" = xyes; then :
++  { $as_echo "$as_me:${as_lineno-$LINENO}: checking for libusb_init in -lusb-1.0" >&5
++$as_echo_n "checking for libusb_init in -lusb-1.0... " >&6; }
++if ${ac_cv_lib_usb_1_0_libusb_init+:} false; then :
++  $as_echo_n "(cached) " >&6
++else
++  ac_check_lib_save_LIBS=$LIBS
++LIBS="-lusb-1.0  $LIBS"
++cat confdefs.h - <<_ACEOF >conftest.$ac_ext
++/* end confdefs.h.  */
++
++/* Override any GCC internal prototype to avoid an error.
++   Use char because int might match the return type of a GCC
++   builtin and then its argument prototype would still apply.  */
++#ifdef __cplusplus
++extern "C"
++#endif
++char libusb_init ();
++int
++main ()
++{
++return libusb_init ();
++  ;
++  return 0;
++}
++_ACEOF
++if ac_fn_c_try_link "$LINENO"; then :
++  ac_cv_lib_usb_1_0_libusb_init=yes
++else
++  ac_cv_lib_usb_1_0_libusb_init=no
++fi
++rm -f core conftest.err conftest.$ac_objext \
++    conftest$ac_exeext conftest.$ac_ext
++LIBS=$ac_check_lib_save_LIBS
++fi
++{ $as_echo "$as_me:${as_lineno-$LINENO}: result: $ac_cv_lib_usb_1_0_libusb_init" >&5
++$as_echo "$ac_cv_lib_usb_1_0_libusb_init" >&6; }
++if test "x$ac_cv_lib_usb_1_0_libusb_init" = xyes; then :
++
++$as_echo "#define HAVE_LIBUSB_1 1" >>confdefs.h
++
++             USBLIBS="$ac_usb_libs"
++             USBINCL="$ac_usb_incl"
++fi
++
++fi
++
++
++    CPPFLAGS="$ac_save_CPPFLAGS"
++fi
++if test "x$ac_cv_lib_usb_usb_init" != "xyes" -a "x$ac_cv_lib_usb_1_0_libusb_init" != "xyes"; then :
++  case "x$with_usb" in
++  x)   as_fn_append wine_notices "|libusb ${notice_platform}development files not found, USB won't be supported." ;;
++  xno) ;;
++  *)   as_fn_error $? "libusb ${notice_platform}development files not found, USB won't be supported.
++This is an error since --with-usb was requested." "$LINENO" 5 ;;
++esac
++fi
++
++
+ if test "x$with_gphoto" != "xno"
+ then
+     ac_save_CPPFLAGS="$CPPFLAGS"
+diff --git a/include/Makefile.in b/include/Makefile.in
+index 16a1e4f..4e8e2c8 100644
+--- a/include/Makefile.in
++++ b/include/Makefile.in
+@@ -222,7 +222,11 @@ SRCDIR_INCLUDES = \
+ 	ddk/usb100.h \
+ 	ddk/usb200.h \
+ 	ddk/usbdlib.h \
++	ddk/usbdrivr.h \
++	ddk/usbioctl.h \
++	ddk/usbiodef.h \
+ 	ddk/wdm.h \
++	ddk/wdmguid.h \
+ 	ddk/winddiui.h \
+ 	ddk/winsplp.h \
+ 	ddraw.h \
+diff --git a/include/config.h.in b/include/config.h.in
+index 0332f69..2c2ce86 100644
+--- a/include/config.h.in
++++ b/include/config.h.in
+@@ -353,6 +353,15 @@
+ /* Define to 1 if you have the `ossaudio' library (-lossaudio). */
+ #undef HAVE_LIBOSSAUDIO
+ 
++/* Define if you have the libudev library and header */
++#undef HAVE_LIBUDEV
++
++/* Define if you have the libusb library and header */
++#undef HAVE_LIBUSB
++
++/* Define if you have the libusb-1.0 library and header */
++#undef HAVE_LIBUSB_1
++
+ /* Define if you have the libxml2 library */
+ #undef HAVE_LIBXML2
+ 
+diff --git a/include/wine/server_protocol.h b/include/wine/server_protocol.h
+index 41e8e28..5935fb9 100644
+--- a/include/wine/server_protocol.h
++++ b/include/wine/server_protocol.h
+@@ -4891,6 +4891,19 @@ struct set_suspend_context_reply
+ };
+ 
+ 
++
++struct get_device_name_request
++{
++    struct request_header __header;
++    obj_handle_t handle;
++};
++struct get_device_name_reply
++{
++    struct reply_header __header;
++    /* VARARG(name,unicode_str); */
++};
++
++
+ enum request
+ {
+     REQ_new_process,
+@@ -5140,6 +5153,7 @@ enum request
+     REQ_set_cursor,
+     REQ_get_suspend_context,
+     REQ_set_suspend_context,
++    REQ_get_device_name,
+     REQ_NB_REQUESTS
+ };
+ 
+@@ -5394,6 +5408,7 @@ union generic_request
+     struct set_cursor_request set_cursor_request;
+     struct get_suspend_context_request get_suspend_context_request;
+     struct set_suspend_context_request set_suspend_context_request;
++    struct get_device_name_request get_device_name_request;
+ };
+ union generic_reply
+ {
+@@ -5646,8 +5661,9 @@ union generic_reply
+     struct set_cursor_reply set_cursor_reply;
+     struct get_suspend_context_reply get_suspend_context_reply;
+     struct set_suspend_context_reply set_suspend_context_reply;
++    struct get_device_name_reply get_device_name_reply;
+ };
+ 
+-#define SERVER_PROTOCOL_VERSION 432
++#define SERVER_PROTOCOL_VERSION 433
+ 
+ #endif /* __WINE_WINE_SERVER_PROTOCOL_H */
+diff --git a/server/request.h b/server/request.h
+index 8f93085..3ee1153 100644
+--- a/server/request.h
++++ b/server/request.h
+@@ -358,6 +358,7 @@ DECL_HANDLER(free_user_handle);
+ DECL_HANDLER(set_cursor);
+ DECL_HANDLER(get_suspend_context);
+ DECL_HANDLER(set_suspend_context);
++DECL_HANDLER(get_device_name);
+ 
+ #ifdef WANT_REQUEST_HANDLERS
+ 
+@@ -611,6 +612,7 @@ static const req_handler req_handlers[REQ_NB_REQUESTS] =
+     (req_handler)req_set_cursor,
+     (req_handler)req_get_suspend_context,
+     (req_handler)req_set_suspend_context,
++    (req_handler)req_get_device_name,
+ };
+ 
+ C_ASSERT( sizeof(affinity_t) == 8 );
+@@ -2144,6 +2146,9 @@ C_ASSERT( sizeof(struct set_cursor_reply) == 56 );
+ C_ASSERT( sizeof(struct get_suspend_context_request) == 16 );
+ C_ASSERT( sizeof(struct get_suspend_context_reply) == 8 );
+ C_ASSERT( sizeof(struct set_suspend_context_request) == 16 );
++C_ASSERT( FIELD_OFFSET(struct get_device_name_request, handle) == 12 );
++C_ASSERT( sizeof(struct get_device_name_request) == 16 );
++C_ASSERT( sizeof(struct get_device_name_reply) == 8 );
+ 
+ #endif  /* WANT_REQUEST_HANDLERS */
+ 
+diff --git a/server/trace.c b/server/trace.c
+index 4318a34..167ba4e 100644
+--- a/server/trace.c
++++ b/server/trace.c
+@@ -3914,6 +3914,16 @@ static void dump_set_suspend_context_request( const struct set_suspend_context_r
+     dump_varargs_context( " context=", cur_size );
+ }
+ 
++static void dump_get_device_name_request( const struct get_device_name_request *req )
++{
++    fprintf( stderr, " handle=%04x", req->handle );
++}
++
++static void dump_get_device_name_reply( const struct get_device_name_reply *req )
++{
++    dump_varargs_unicode_str( " name=", cur_size );
++}
++
+ static const dump_func req_dumpers[REQ_NB_REQUESTS] = {
+     (dump_func)dump_new_process_request,
+     (dump_func)dump_get_new_process_info_request,
+@@ -4162,6 +4172,7 @@ static const dump_func req_dumpers[REQ_NB_REQUESTS] = {
+     (dump_func)dump_set_cursor_request,
+     (dump_func)dump_get_suspend_context_request,
+     (dump_func)dump_set_suspend_context_request,
++    (dump_func)dump_get_device_name_request,
+ };
+ 
+ static const dump_func reply_dumpers[REQ_NB_REQUESTS] = {
+@@ -4412,6 +4423,7 @@ static const dump_func reply_dumpers[REQ_NB_REQUESTS] = {
+     (dump_func)dump_set_cursor_reply,
+     (dump_func)dump_get_suspend_context_reply,
+     NULL,
++    (dump_func)dump_get_device_name_reply,
+ };
+ 
+ static const char * const req_names[REQ_NB_REQUESTS] = {
+@@ -4662,6 +4674,7 @@ static const char * const req_names[REQ_NB_REQUESTS] = {
+     "set_cursor",
+     "get_suspend_context",
+     "set_suspend_context",
++    "get_device_name",
+ };
+ 
+ static const struct
+-- 
+1.7.9.7
+

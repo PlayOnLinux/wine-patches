@@ -1,0 +1,281 @@
+From 472b0d9df693484565509fe0637047dec1cf1221 Mon Sep 17 00:00:00 2001
+From: Octavian Voicu <octavian.voicu@gmail.com>
+Date: Wed, 9 Nov 2011 00:23:56 +0200
+Subject: ddraw: Fix a couple of d3d2 and d3d3 bugs.
+Reply-To: wine-devel <wine-devel@winehq.org>
+
+---
+ dlls/ddraw/ddraw.c         |    2 +
+ dlls/ddraw/ddraw_private.h |    2 +
+ dlls/ddraw/device.c        |   61 ++++++++++++++++++++++++++++++++++++++------
+ dlls/ddraw/executebuffer.c |    9 +-----
+ dlls/ddraw/light.c         |   12 ++++++---
+ 5 files changed, 67 insertions(+), 19 deletions(-)
+
+diff --git a/dlls/ddraw/ddraw.c b/dlls/ddraw/ddraw.c
+index caf70c7..676c4c2 100644
+--- a/dlls/ddraw/ddraw.c
++++ b/dlls/ddraw/ddraw.c
+@@ -4412,6 +4412,7 @@ static HRESULT WINAPI d3d3_CreateDevice(IDirect3D3 *iface, REFCLSID riid,
+     {
+         device_impl = impl_from_IDirect3DDevice7(device7);
+         *device = &device_impl->IDirect3DDevice3_iface;
++        device_impl->dummy_rs_lighting = 0xffffffff;
+     }
+ 
+     return hr;
+@@ -4435,6 +4436,7 @@ static HRESULT WINAPI d3d2_CreateDevice(IDirect3D2 *iface, REFCLSID riid,
+     {
+         device_impl = impl_from_IDirect3DDevice7(device7);
+         *device = &device_impl->IDirect3DDevice2_iface;
++        device_impl->dummy_rs_lighting = 0xffffffff;
+     }
+ 
+     return hr;
+diff --git a/dlls/ddraw/ddraw_private.h b/dlls/ddraw/ddraw_private.h
+index 17147c1..d421a49 100644
+--- a/dlls/ddraw/ddraw_private.h
++++ b/dlls/ddraw/ddraw_private.h
+@@ -302,6 +302,7 @@ struct IDirect3DDeviceImpl
+ 
+     /* Light state */
+     DWORD material;
++    DWORD dummy_rs_lighting;
+ 
+     /* Rendering functions to wrap D3D(1-3) to D3D7 */
+     D3DPRIMITIVETYPE primitive_type;
+@@ -417,6 +418,7 @@ struct IDirect3DLightImpl
+ 
+     D3DLIGHT2 light;
+     D3DLIGHT7 light7;
++    BOOL active;
+ 
+     DWORD dwLightIndex;
+ 
+diff --git a/dlls/ddraw/device.c b/dlls/ddraw/device.c
+index 63616f4..3e702a0 100644
+--- a/dlls/ddraw/device.c
++++ b/dlls/ddraw/device.c
+@@ -2221,6 +2221,20 @@ static HRESULT WINAPI IDirect3DDeviceImpl_2_Index(IDirect3DDevice2 *iface, WORD
+     return IDirect3DDevice3_Index(&This->IDirect3DDevice3_iface, wVertexIndex);
+ }
+ 
++static DWORD handle_old_drawprimitive_flags(IDirect3DDeviceImpl *This, DWORD flags, DWORD fvf)
++{
++    IDirect3DDevice7_SetRenderState(&This->IDirect3DDevice7_iface, WINED3DRS_CLIPPING,
++            !(flags & D3DDP_DONOTCLIP));
++
++    IDirect3DDevice7_SetRenderState(&This->IDirect3DDevice7_iface, WINED3DRS_LIGHTING,
++            !(flags & D3DDP_DONOTLIGHT) && (fvf & D3DFVF_NORMAL) && This->material);
++
++    IDirect3DDevice7_SetRenderState(&This->IDirect3DDevice7_iface, WINED3DRS_EXTENTS,
++            !(flags & D3DDP_DONOTUPDATEEXTENTS));
++
++    return flags & ~(D3DDP_DONOTCLIP | D3DDP_DONOTLIGHT | D3DDP_DONOTUPDATEEXTENTS);
++}
++
+ /*****************************************************************************
+  * IDirect3DDevice3::End
+  *
+@@ -2247,6 +2261,8 @@ IDirect3DDeviceImpl_3_End(IDirect3DDevice3 *iface,
+ 
+     TRACE("iface %p, flags %#x.\n", iface, Flags);
+ 
++    This->render_flags = handle_old_drawprimitive_flags(This, This->render_flags, This->vertex_type);
++
+     return IDirect3DDevice7_DrawPrimitive(&This->IDirect3DDevice7_iface, This->primitive_type,
+             This->vertex_type, This->vertex_buffer, This->nb_vertices, This->render_flags);
+ }
+@@ -2448,6 +2464,10 @@ IDirect3DDeviceImpl_3_GetRenderState(IDirect3DDevice3 *iface,
+ 
+     switch(dwRenderStateType)
+     {
++        case D3DRENDERSTATE_LIGHTING:
++            *lpdwRenderState = This->dummy_rs_lighting;
++            return D3D_OK;
++
+         case D3DRENDERSTATE_TEXTUREHANDLE:
+         {
+             /* This state is wrapped to SetTexture in SetRenderState, so
+@@ -2781,6 +2801,10 @@ IDirect3DDeviceImpl_3_SetRenderState(IDirect3DDevice3 *iface,
+ 
+     switch(RenderStateType)
+     {
++        case D3DRENDERSTATE_LIGHTING:
++            This->dummy_rs_lighting = Value;
++            return D3D_OK;
++
+         case D3DRENDERSTATE_TEXTUREHANDLE:
+         {
+             IDirectDrawSurfaceImpl *surf;
+@@ -2971,16 +2995,21 @@ IDirect3DDeviceImpl_3_SetLightState(IDirect3DDevice3 *iface,
+     EnterCriticalSection(&ddraw_cs);
+     if (LightStateType == D3DLIGHTSTATE_MATERIAL /* 1 */)
+     {
+-        IDirect3DMaterialImpl *m = ddraw_get_object(&This->handle_table, Value - 1, DDRAW_HANDLE_MATERIAL);
+-        if (!m)
++        if (Value)
+         {
+-            WARN("Invalid material handle.\n");
+-            LeaveCriticalSection(&ddraw_cs);
+-            return DDERR_INVALIDPARAMS;
+-        }
++            IDirect3DMaterialImpl *m = ddraw_get_object(&This->handle_table, Value - 1, DDRAW_HANDLE_MATERIAL);
++            if (!m)
++            {
++                WARN("Invalid material handle.\n");
++                LeaveCriticalSection(&ddraw_cs);
++                return DDERR_INVALIDPARAMS;
++            }
+ 
+-        TRACE(" activating material %p.\n", m);
+-        material_activate(m);
++            TRACE(" activating material %p.\n", m);
++            material_activate(m);
++        }
++        else
++            TRACE(" NULL material, lighting will be disabled.\n");
+ 
+         This->material = Value;
+     }
+@@ -3511,6 +3540,8 @@ static HRESULT WINAPI IDirect3DDeviceImpl_3_DrawPrimitive(IDirect3DDevice3 *ifac
+     TRACE("iface %p, primitive_type %#x, FVF %#x, vertices %p, vertex_count %u, flags %#x.\n",
+             iface, PrimitiveType, VertexType, Vertices, VertexCount, Flags);
+ 
++    Flags = handle_old_drawprimitive_flags(This, Flags, VertexType);
++
+     return IDirect3DDevice7_DrawPrimitive(&This->IDirect3DDevice7_iface,
+             PrimitiveType, VertexType, Vertices, VertexCount, Flags);
+ }
+@@ -3535,6 +3566,8 @@ static HRESULT WINAPI IDirect3DDeviceImpl_2_DrawPrimitive(IDirect3DDevice2 *ifac
+             return DDERR_INVALIDPARAMS;  /* Should never happen */
+     }
+ 
++    Flags = handle_old_drawprimitive_flags(This, Flags, FVF);
++
+     return IDirect3DDevice7_DrawPrimitive(&This->IDirect3DDevice7_iface,
+             PrimitiveType, FVF, Vertices, VertexCount, Flags);
+ }
+@@ -3637,6 +3670,8 @@ static HRESULT WINAPI IDirect3DDeviceImpl_3_DrawIndexedPrimitive(IDirect3DDevice
+     TRACE("iface %p, primitive_type %#x, FVF %#x, vertices %p, vertex_count %u, indices %p, index_count %u, flags %#x.\n",
+             iface, PrimitiveType, VertexType, Vertices, VertexCount, Indices, IndexCount, Flags);
+ 
++    Flags = handle_old_drawprimitive_flags(This, Flags, VertexType);
++
+     return IDirect3DDevice7_DrawIndexedPrimitive(&This->IDirect3DDevice7_iface,
+             PrimitiveType, VertexType, Vertices, VertexCount, Indices, IndexCount, Flags);
+ }
+@@ -3661,6 +3696,8 @@ static HRESULT WINAPI IDirect3DDeviceImpl_2_DrawIndexedPrimitive(IDirect3DDevice
+             return DDERR_INVALIDPARAMS;  /* Should never happen */
+     }
+ 
++    Flags = handle_old_drawprimitive_flags(This, Flags, FVF);
++
+     return IDirect3DDevice7_DrawIndexedPrimitive(&This->IDirect3DDevice7_iface,
+             PrimitiveType, FVF, Vertices, VertexCount, Indices, IndexCount, Flags);
+ }
+@@ -3892,6 +3929,8 @@ static HRESULT WINAPI IDirect3DDeviceImpl_3_DrawPrimitiveStrided(IDirect3DDevice
+     TRACE("iface %p, primitive_type %#x, FVF %#x, strided_data %p, vertex_count %u, flags %#x.\n",
+             iface, PrimitiveType, VertexType, D3DDrawPrimStrideData, VertexCount, Flags);
+ 
++    Flags = handle_old_drawprimitive_flags(This, Flags, VertexType);
++
+     return IDirect3DDevice7_DrawPrimitiveStrided(&This->IDirect3DDevice7_iface,
+             PrimitiveType, VertexType, D3DDrawPrimStrideData, VertexCount, Flags);
+ }
+@@ -4039,6 +4078,8 @@ static HRESULT WINAPI IDirect3DDeviceImpl_3_DrawIndexedPrimitiveStrided(IDirect3
+     TRACE("iface %p, primitive_type %#x, FVF %#x, strided_data %p, vertex_count %u, indices %p, index_count %u, flags %#x.\n",
+             iface, PrimitiveType, VertexType, D3DDrawPrimStrideData, VertexCount, Indices, IndexCount, Flags);
+ 
++    Flags = handle_old_drawprimitive_flags(This, Flags, VertexType);
++
+     return IDirect3DDevice7_DrawIndexedPrimitiveStrided(&This->IDirect3DDevice7_iface,
+             PrimitiveType, VertexType, D3DDrawPrimStrideData, VertexCount, Indices, IndexCount, Flags);
+ }
+@@ -4150,6 +4191,8 @@ static HRESULT WINAPI IDirect3DDeviceImpl_3_DrawPrimitiveVB(IDirect3DDevice3 *if
+     TRACE("iface %p, primitive_type %#x, vb %p, start_vertex %u, vertex_count %u, flags %#x.\n",
+             iface, PrimitiveType, D3DVertexBuf, StartVertex, NumVertices, Flags);
+ 
++    Flags = handle_old_drawprimitive_flags(This, Flags, vb->fvf);
++
+     return IDirect3DDevice7_DrawPrimitiveVB(&This->IDirect3DDevice7_iface,
+             PrimitiveType, &vb->IDirect3DVertexBuffer7_iface, StartVertex, NumVertices, Flags);
+ }
+@@ -4313,6 +4356,8 @@ static HRESULT WINAPI IDirect3DDeviceImpl_3_DrawIndexedPrimitiveVB(IDirect3DDevi
+     TRACE("iface %p, primitive_type %#x, vb %p, indices %p, index_count %u, flags %#x.\n",
+             iface, PrimitiveType, D3DVertexBuf, Indices, IndexCount, Flags);
+ 
++    Flags = handle_old_drawprimitive_flags(This, Flags, vb->fvf);
++
+     return IDirect3DDevice7_DrawIndexedPrimitiveVB(&This->IDirect3DDevice7_iface,
+             PrimitiveType, &vb->IDirect3DVertexBuffer7_iface, 0, IndexCount, Indices, IndexCount,
+             Flags);
+diff --git a/dlls/ddraw/executebuffer.c b/dlls/ddraw/executebuffer.c
+index 98096ce..bcee19c 100644
+--- a/dlls/ddraw/executebuffer.c
++++ b/dlls/ddraw/executebuffer.c
+@@ -237,13 +237,8 @@ HRESULT d3d_execute_buffer_execute(IDirect3DExecuteBufferImpl *This,
+ 			ERR("Unexpected Light State Type %d\n", ci->u1.dlstLightStateType);
+                     else if (ci->u1.dlstLightStateType == D3DLIGHTSTATE_MATERIAL /* 1 */)
+                     {
+-                        IDirect3DMaterialImpl *m;
+-
+-                        m = ddraw_get_object(&lpDevice->handle_table, ci->u2.dwArg[0] - 1, DDRAW_HANDLE_MATERIAL);
+-                        if (!m)
+-                            ERR("Invalid material handle %#x.\n", ci->u2.dwArg[0]);
+-                        else
+-                            material_activate(m);
++                        IDirect3DDevice2_SetLightState(&lpDevice->IDirect3DDevice2_iface,
++                                ci->u1.drstRenderStateType, ci->u2.dwArg[0]);
+                     }
+                     else if (ci->u1.dlstLightStateType == D3DLIGHTSTATE_COLORMODEL /* 3 */)
+                     {
+diff --git a/dlls/ddraw/light.c b/dlls/ddraw/light.c
+index a2b22b5..b2451cd 100644
+--- a/dlls/ddraw/light.c
++++ b/dlls/ddraw/light.c
+@@ -60,10 +60,10 @@ void light_activate(IDirect3DLightImpl *light)
+     device = light->active_viewport->active_device;
+ 
+     light_update(light);
+-    if (!(light->light.dwFlags & D3DLIGHT_ACTIVE))
++    if (!light->active && (light->light.dwFlags & D3DLIGHT_ACTIVE))
+     {
+         IDirect3DDevice7_LightEnable(&device->IDirect3DDevice7_iface, light->dwLightIndex, TRUE);
+-        light->light.dwFlags |= D3DLIGHT_ACTIVE;
++        light->active = TRUE;
+     }
+ }
+ 
+@@ -84,10 +84,10 @@ void light_deactivate(IDirect3DLightImpl *light)
+     device = light->active_viewport->active_device;
+ 
+     /* If was not active, activate it */
+-    if (light->light.dwFlags & D3DLIGHT_ACTIVE)
++    if (light->active)
+     {
+         IDirect3DDevice7_LightEnable(&device->IDirect3DDevice7_iface, light->dwLightIndex, FALSE);
+-        light->light.dwFlags &= ~D3DLIGHT_ACTIVE;
++        light->active = FALSE;
+     }
+ }
+ 
+@@ -221,11 +221,15 @@ static HRESULT WINAPI IDirect3DLightImpl_SetLight(IDirect3DLight *iface, D3DLIGH
+     light7->dvAttenuation0 = lpLight->dvAttenuation0;
+     light7->dvAttenuation1 = lpLight->dvAttenuation1;
+     light7->dvAttenuation2 = lpLight->dvAttenuation2;
++    if (lpLight->dwSize == sizeof(D3DLIGHT))
++        FIXME("D3DLIGHT attenuation values should be interpreted differently.\n");
+     light7->dvTheta        = lpLight->dvTheta;
+     light7->dvPhi          = lpLight->dvPhi;
+ 
+     EnterCriticalSection(&ddraw_cs);
+     memcpy(&This->light, lpLight, lpLight->dwSize);
++    if (lpLight->dwSize == sizeof(D3DLIGHT))
++        This->light.dwFlags |= D3DLIGHT_ACTIVE;
+     if (This->light.dwFlags & D3DLIGHT_ACTIVE)
+         light_update(This);
+     LeaveCriticalSection(&ddraw_cs);
+-- 
+1.7.4.1
+

@@ -1,0 +1,13 @@
+diff --git a/dlls/wined3d/buffer.c b/dlls/wined3d/buffer.c
+index 8bb1f63..8f388ab 100644
+--- a/dlls/wined3d/buffer.c
++++ b/dlls/wined3d/buffer.c
+@@ -1499,6 +1499,8 @@ HRESULT buffer_init(struct wined3d_buffer *buffer, IWineD3DDeviceImpl *device,
+         buffer->flags |= WINED3D_BUFFER_CREATEBO;
+     }
+ 
++    buffer->flags |= WINED3D_BUFFER_DOUBLEBUFFER;
++
+     if (data)
+     {
+         BYTE *ptr;

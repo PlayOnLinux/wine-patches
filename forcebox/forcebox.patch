@@ -1,0 +1,315 @@
+--- wine-1.1.34/dlls/dinput/device.c	2009-12-04 18:05:35.000000000 +0000
++++ wine-1.1.34/dlls/dinput/device.c.new	2009-12-07 01:07:57.000000000 +0000
+@@ -580,7 +580,7 @@
+     This->acquired = 1;
+     if (res == DI_OK)
+     {
+-        This->queue_head = This->queue_tail = This->overflow = 0;
++        //This->queue_head = This->queue_tail = This->overflow = 0;
+         check_dinput_hooks(iface);
+     }
+     LeaveCriticalSection(&This->crit);
+--- wine-1.1.34/dlls/dinput/mouse.c	2009-12-04 18:05:35.000000000 +0000
++++ wine-1.1.34/dlls/dinput/mouse.c.new	2009-12-07 01:25:12.000000000 +0000
+@@ -48,6 +48,8 @@
+ 
+ static const IDirectInputDevice8AVtbl SysMouseAvt;
+ static const IDirectInputDevice8WVtbl SysMouseWvt;
++BOOL m_forceWarp=FALSE;
++POINT m_joeCursorPlacement;
+ 
+ typedef struct SysMouseImpl SysMouseImpl;
+ 
+@@ -55,7 +57,8 @@
+ {
+     WARP_DEFAULT,
+     WARP_DISABLE,
+-    WARP_FORCE_ON
++    WARP_FORCE_ON,
++    WARP_FORCEBOX_ON
+ } WARP_MOUSE;
+ 
+ struct SysMouseImpl
+@@ -76,9 +79,11 @@
+     DIMOUSESTATE2                   m_state;
+ 
+     WARP_MOUSE                      warp_override;
++    /* This defines the warp ``box'' */
++    DWORD                           warp_boxpixels;
+ };
+ 
+-static int dinput_mouse_hook( LPDIRECTINPUTDEVICE8A iface, WPARAM wparam, LPARAM lparam );
++static void dinput_mouse_hook( LPDIRECTINPUTDEVICE8A iface, WPARAM wparam, LPARAM lparam );
+ 
+ const GUID DInput_Wine_Mouse_GUID = { /* 9e573ed8-7734-11d2-8d4a-23903fb6bdf7 */
+     0x9e573ed8, 0x7734, 0x11d2, {0x8d, 0x4a, 0x23, 0x90, 0x3f, 0xb6, 0xbd, 0xf7}
+@@ -185,6 +190,7 @@
+     LPDIDATAFORMAT df = NULL;
+     unsigned i;
+     char buffer[20];
++    char boxpixels[4];
+     HKEY hkey, appkey;
+ 
+     newDevice = HeapAlloc(GetProcessHeap(),HEAP_ZERO_MEMORY,sizeof(SysMouseImpl));
+@@ -205,6 +211,14 @@
+             newDevice->warp_override = WARP_DISABLE;
+         else if (!strcasecmp(buffer, "force"))
+             newDevice->warp_override = WARP_FORCE_ON;
++        else if (!strcasecmp(buffer, "force-box")) {
++            newDevice->warp_override = WARP_FORCEBOX_ON;
++            newDevice->warp_boxpixels = 10;
++            if (!get_config_key(hkey, appkey, "BoxPixels", boxpixels, sizeof(boxpixels)))
++            {
++                newDevice->warp_boxpixels = atoi(boxpixels);
++            }
++        }
+     }
+     if (appkey) RegCloseKey(appkey);
+     if (hkey) RegCloseKey(hkey);
+@@ -286,25 +300,31 @@
+  */
+ 
+ /* low-level mouse hook */
+-static int dinput_mouse_hook( LPDIRECTINPUTDEVICE8A iface, WPARAM wparam, LPARAM lparam )
++static void dinput_mouse_hook( LPDIRECTINPUTDEVICE8A iface, WPARAM wparam, LPARAM lparam )
+ {
+     MSLLHOOKSTRUCT *hook = (MSLLHOOKSTRUCT *)lparam;
+     SysMouseImpl* This = (SysMouseImpl*) iface;
+     DWORD dwCoop;
+-    int wdata = 0, inst_id = -1, ret;
++    //int wdata = 0, inst_id = -1, ret;
++    POINT pt, pt1;
++    RECT rect;
++    int mouseForceOffset=4;
+ 
+-    TRACE("msg %lx @ (%d %d)\n", wparam, hook->pt.x, hook->pt.y);
++    //TRACE("msg %lx @ (%d %d)\n", wparam, hook->pt.x, hook->pt.y);
++    int wdata = 0, inst_id = -1;
+ 
+     EnterCriticalSection(&This->base.crit);
+     dwCoop = This->base.dwCoopLevel;
+-    ret = dwCoop & DISCL_EXCLUSIVE;
++    //ret = dwCoop & DISCL_EXCLUSIVE;
+ 
+     switch(wparam) {
+         case WM_MOUSEMOVE:
+         {
+-            POINT pt, pt1;
++            //POINT pt, pt1;
++            POINT ptTarget;
+ 
+             GetCursorPos(&pt);
++            ptTarget=pt;
+             This->m_state.lX += pt.x = hook->pt.x - pt.x;
+             This->m_state.lY += pt.y = hook->pt.y - pt.y;
+ 
+@@ -315,6 +335,9 @@
+             } else
+                 pt1 = pt;
+ 
++            //FIXME("MouseMove Pt.x%d,pt.y%d\n",pt.x,pt.y);
++            //FIXME("MouseMove Pt1.x%d,pt1.y%d\n",pt1.x,pt1.y);
++
+             if (pt.x)
+             {
+                 inst_id = DIDFT_MAKEINSTANCE(WINE_MOUSE_X_AXIS_INSTANCE) | DIDFT_RELAXIS;
+@@ -323,16 +346,57 @@
+             if (pt.y)
+             {
+                 /* Already have X, need to queue it */
+-                if (inst_id != -1)
++                if (inst_id != -1) {
+                     queue_event((LPDIRECTINPUTDEVICE8A)This, inst_id,
+                                 wdata, GetCurrentTime(), This->base.dinput->evsequence);
++                    //FIXME("EVENT Queued\n");
++                }                
+                 inst_id = DIDFT_MAKEINSTANCE(WINE_MOUSE_Y_AXIS_INSTANCE) | DIDFT_RELAXIS;
+                 wdata = pt1.y;
+             }
+-
++            
++            if (pt.x) {
++               if (pt1.x) {
++                   m_joeCursorPlacement.x=pt1.x;
++               }
++            }
++            if (pt.y) {
++               if (pt1.y) {
++                   m_joeCursorPlacement.y=pt1.y;
++               }
++            }
++            if (m_forceWarp) {
++                /* Get the window dimension and find the center */
++               //GetWindowRect(This->base.win, &rect);
++               //This->win_centerX = (rect.right  - rect.left) / 2;
++               //This->win_centerY = (rect.bottom - rect.top ) / 2;  
++               //This->mapped_center.x = This->win_centerX;
++               //This->mapped_center.y = This->win_centerY;
++               //MapWindowPoints(This->base.win, HWND_DESKTOP, &This->mapped_center, 1);
++               if (This->need_warp) {
++                   This->need_warp=FALSE;
++               } else {
++               This->need_warp = (hook->pt.x<=mouseForceOffset || 
++                                  hook->pt.y<=mouseForceOffset || 
++                                  hook->pt.x>=((2 * This->win_centerX)-mouseForceOffset) || 
++                                  hook->pt.y>=((2 * This->win_centerY)-mouseForceOffset) ); 
++               }                   
++            }    
++            else {
+             This->need_warp = This->warp_override != WARP_DISABLE &&
+-                              (pt.x || pt.y) &&
+-                              (dwCoop & DISCL_EXCLUSIVE || This->warp_override == WARP_FORCE_ON);
++                              ( 
++			      	(pt.x || pt.y) &&
++                              	(dwCoop & DISCL_EXCLUSIVE || This->warp_override == WARP_FORCE_ON)
++			      ||
++			      	(
++				    hook->pt.x<This->warp_boxpixels || 
++				    hook->pt.y<This->warp_boxpixels || 
++				    hook->pt.x>((2 * This->win_centerX)-This->warp_boxpixels) || 
++				    hook->pt.y>((2 * This->win_centerY)-This->warp_boxpixels)
++				) && This->warp_override == WARP_FORCEBOX_ON
++			      );
++            }
++		      
+             break;
+         }
+         case WM_MOUSEWHEEL:
+@@ -371,8 +435,8 @@
+             inst_id = DIDFT_MAKEINSTANCE(WINE_MOUSE_BUTTONS_INSTANCE + 2 + HIWORD(hook->mouseData)) | DIDFT_PSHBUTTON;
+             This->m_state.rgbButtons[2 + HIWORD(hook->mouseData)] = wdata = 0x00;
+             break;
+-        default:
+-            ret = 0;
++        //default:
++            //ret = 0;
+     }
+ 
+ 
+@@ -381,10 +445,11 @@
+         _dump_mouse_state(&This->m_state);
+         queue_event((LPDIRECTINPUTDEVICE8A)This, inst_id,
+                     wdata, GetCurrentTime(), This->base.dinput->evsequence++);
+-    }
++        //FIXME("EVENT Queued\n");
++    } 
+ 
+     LeaveCriticalSection(&This->base.crit);
+-    return ret;
++    //return ret;
+ }
+ 
+ static BOOL dinput_window_check(SysMouseImpl* This) {
+@@ -410,6 +475,13 @@
+ /******************************************************************************
+   *     Acquire : gets exclusive control of the mouse
+   */
++
++static HRESULT WINAPI SysMouseAImpl_AcquireJoe(LPDIRECTINPUTDEVICE8A iface)
++{
++      m_forceWarp=(getenv("WINEFORCEMOUSEWARP") == NULL) ? FALSE : TRUE;
++      return DI_OK;
++}  
++  
+ static HRESULT WINAPI SysMouseAImpl_Acquire(LPDIRECTINPUTDEVICE8A iface)
+ {
+     SysMouseImpl *This = (SysMouseImpl *)iface;
+@@ -417,6 +489,8 @@
+     POINT point;
+     HRESULT res;
+     
++    m_forceWarp=(getenv("WINEFORCEMOUSEWARP") == NULL) ? FALSE : TRUE;
++    
+     TRACE("(this=%p)\n",This);
+ 
+     if ((res = IDirectInputDevice2AImpl_Acquire(iface)) != DI_OK) return res;
+@@ -462,16 +536,23 @@
+     This->win_centerY = (rect.bottom - rect.top ) / 2;
+ 
+     /* Warp the mouse to the center of the window */
+-    if (This->base.dwCoopLevel & DISCL_EXCLUSIVE || This->warp_override == WARP_FORCE_ON)
++    if (This->base.dwCoopLevel & DISCL_EXCLUSIVE || This->warp_override == WARP_FORCE_ON || This->warp_override == WARP_FORCEBOX_ON)
+     {
+       This->mapped_center.x = This->win_centerX;
+       This->mapped_center.y = This->win_centerY;
+       MapWindowPoints(This->base.win, HWND_DESKTOP, &This->mapped_center, 1);
+       TRACE("Warping mouse to %d - %d\n", This->mapped_center.x, This->mapped_center.y);
++      This->need_warp = FALSE;
+       SetCursorPos( This->mapped_center.x, This->mapped_center.y );
++      GetCursorPos( &m_joeCursorPlacement);
+       This->last_warped = GetCurrentTime();
+ 
+-      This->need_warp = FALSE;
++      //This->need_warp = FALSE;
++    }
++    
++    else {
++         GetCursorPos(&m_joeCursorPlacement);
++         SetCursorPos(m_joeCursorPlacement.x,m_joeCursorPlacement.y);
+     }
+ 
+     return DI_OK;
+@@ -482,6 +563,11 @@
+   */
+ static HRESULT WINAPI SysMouseAImpl_Unacquire(LPDIRECTINPUTDEVICE8A iface)
+ {
++    return DI_OK;   
++}
++
++static HRESULT WINAPI SysMouseAImpl_Unacquire25(LPDIRECTINPUTDEVICE8A iface)
++{   
+     SysMouseImpl *This = (SysMouseImpl *)iface;
+     HRESULT res;
+     
+@@ -496,10 +582,16 @@
+     }
+ 
+     /* And put the mouse cursor back where it was at acquire time */
+-    if (This->base.dwCoopLevel & DISCL_EXCLUSIVE || This->warp_override == WARP_FORCE_ON)
+-    {
+-      TRACE(" warping mouse back to (%d , %d)\n", This->org_coords.x, This->org_coords.y);
+-      SetCursorPos(This->org_coords.x, This->org_coords.y);
++    
++    if (This->base.dwCoopLevel & DISCL_EXCLUSIVE || This->warp_override == WARP_FORCE_ON || This->warp_override == WARP_FORCEBOX_ON)
++   {
++      //TRACE(" warping mouse back to (%d , %d)\n", This->org_coords.x, This->org_coords.y);
++      //SetCursorPos(This->org_coords.x, This->org_coords.y);
++      GetCursorPos(&m_joeCursorPlacement);
++    } 
++    else {
++      SetCursorPos(m_joeCursorPlacement.x,m_joeCursorPlacement.y);
++      GetCursorPos(&m_joeCursorPlacement);
+     }
+ 	
+     return DI_OK;
+@@ -568,10 +660,17 @@
+             return DIERR_GENERIC;
+ 	TRACE("Warping mouse to %d - %d\n", This->mapped_center.x, This->mapped_center.y);
+ 	SetCursorPos( This->mapped_center.x, This->mapped_center.y );
++	GetCursorPos(&m_joeCursorPlacement);
+         This->last_warped = GetCurrentTime();
+ 
+         This->need_warp = FALSE;
+     }
++
++    else {
++         GetCursorPos(&m_joeCursorPlacement);
++         SetCursorPos(m_joeCursorPlacement.x,m_joeCursorPlacement.y);
++    }
++
+     return res;
+ }
+ 
+@@ -607,8 +706,10 @@
+ 		    /* Querying the range of either the X or the Y axis.  As I do
+ 		       not know the range, do as if the range were
+ 		       unrestricted...*/
+-		    pr->lMin = DIPROPRANGE_NOMIN;
+-		    pr->lMax = DIPROPRANGE_NOMAX;
++		    //pr->lMin = DIPROPRANGE_NOMIN;
++		    //pr->lMax = DIPROPRANGE_NOMAX;
++		    pr->lMin = 0; //JoeFix MAX RANGE
++		    pr->lMax = 1280;
+ 		}
+ 		
+ 		break;

@@ -1,0 +1,156 @@
+diff --git a/dlls/ntdll/critsection.c b/dlls/ntdll/critsection.c
+index fb69b31..fef65a3 100644
+--- a/dlls/ntdll/critsection.c
++++ b/dlls/ntdll/critsection.c
+@@ -36,10 +36,57 @@
+ #include "winternl.h"
+ #include "wine/debug.h"
+ #include "ntdll_misc.h"
++#include "ddk/wdm.h"
++
+ 
+ WINE_DEFAULT_DEBUG_CHANNEL(ntdll);
+ WINE_DECLARE_DEBUG_CHANNEL(relay);
+ 
++
++/***********************************************************************
++ *           update time information in user shared area
++ */
++extern struct _KUSER_SHARED_DATA *user_shared_data;
++void update_shared_data_time(void)
++{
++    LARGE_INTEGER now, start, irq;
++
++    NtQuerySystemTime( &now );
++
++    //FIXME("%lld\n", now.QuadPart);
++
++    /*
++    if(NtCurrentTeb() && NtCurrentTeb()->Peb && NtCurrentTeb()->Peb->FastPebLock) {
++        RtlEnterCriticalSection(NtCurrentTeb()->Peb->FastPebLock);
++    }
++    */
++
++    start.QuadPart = (now.QuadPart - server_start_time) / 10000;
++
++    //user_shared_data->TickCountQuad = (now.QuadPart - server_start_time) / 10000;
++    user_shared_data->TickCount.High2Time = start.HighPart;
++    user_shared_data->TickCount.LowPart = start.LowPart;
++    user_shared_data->TickCount.High1Time = start.HighPart;
++    user_shared_data->TickCountLowDeprecated = start.LowPart;
++
++    irq.QuadPart = (now.QuadPart - server_start_time);
++
++    user_shared_data->InterruptTime.High2Time = irq.HighPart;
++    user_shared_data->InterruptTime.LowPart = irq.LowPart;
++    user_shared_data->InterruptTime.High1Time = irq.HighPart;
++
++    user_shared_data->SystemTime.High2Time = now.HighPart;
++    user_shared_data->SystemTime.LowPart = now.LowPart;
++    user_shared_data->SystemTime.High1Time = now.HighPart;
++
++    /*
++    if(NtCurrentTeb() && NtCurrentTeb()->Peb && NtCurrentTeb()->Peb->FastPebLock) {
++        RtlLeaveCriticalSection(NtCurrentTeb()->Peb->FastPebLock);
++    }
++    */
++}
++
++
+ static inline LONG interlocked_inc( PLONG dest )
+ {
+     return interlocked_xchg_add( dest, 1 ) + 1;
+@@ -527,6 +574,8 @@ NTSTATUS WINAPI RtlpUnWaitCriticalSection( RTL_CRITICAL_SECTION *crit )
+  */
+ NTSTATUS WINAPI RtlEnterCriticalSection( RTL_CRITICAL_SECTION *crit )
+ {
++    //update_shared_data_time();
++
+     if (crit->SpinCount)
+     {
+         ULONG count;
+diff --git a/dlls/ntdll/ntdll_misc.h b/dlls/ntdll/ntdll_misc.h
+index 20f1c45..2fdb28e 100644
+--- a/dlls/ntdll/ntdll_misc.h
++++ b/dlls/ntdll/ntdll_misc.h
+@@ -94,6 +94,9 @@ extern int server_get_unix_fd( HANDLE handle, unsigned int access, int *unix_fd,
+                                int *needs_close, enum server_fd_type *type, unsigned int *options ) DECLSPEC_HIDDEN;
+ extern int server_pipe( int fd[2] ) DECLSPEC_HIDDEN;
+ 
++extern void update_shared_data_time(void);
++
++
+ /* security descriptors */
+ NTSTATUS NTDLL_create_struct_sd(PSECURITY_DESCRIPTOR nt_sd, struct security_descriptor **server_sd,
+                                 data_size_t *server_sd_len) DECLSPEC_HIDDEN;
+diff --git a/dlls/ntdll/thread.c b/dlls/ntdll/thread.c
+index e328c5f..9694824 100644
+--- a/dlls/ntdll/thread.c
++++ b/dlls/ntdll/thread.c
+@@ -23,6 +23,7 @@
+ 
+ #include <assert.h>
+ #include <stdarg.h>
++#include <stdint.h>
+ #include <sys/types.h>
+ #ifdef HAVE_SYS_MMAN_H
+ #include <sys/mman.h>
+@@ -67,6 +68,21 @@ static RTL_BITMAP fls_bitmap;
+ static LIST_ENTRY tls_links;
+ static int nb_threads = 1;
+ 
++static void* shared_data_thread(void* arg) {
++    struct timespec req, rem;
++
++    req.tv_sec = 0;
++    req.tv_nsec = 15600000;
++
++    while(1) {
++        update_shared_data_time();
++        nanosleep(&req, &rem);
++    }
++
++    return NULL;
++}
++
++
+ /***********************************************************************
+  *           get_unicode_string
+  *
+@@ -196,9 +212,11 @@ HANDLE thread_init(void)
+     void *addr;
+     SIZE_T size, info_size;
+     HANDLE exe_file = 0;
+-    LARGE_INTEGER now;
++    LARGE_INTEGER now, irq;
+     struct ntdll_thread_data *thread_data;
+     static struct debug_info debug_info;  /* debug info for initial thread */
++    pthread_t thread;
++    int s;
+ 
+     virtual_init();
+ 
+@@ -289,6 +307,9 @@ HANDLE thread_init(void)
+ 
+     /* initialize time values in user_shared_data */
+     NtQuerySystemTime( &now );
++    irq.QuadPart = (now.QuadPart - server_start_time);
++    user_shared_data->InterruptTime.LowPart = irq.LowPart;
++    user_shared_data->InterruptTime.High1Time = user_shared_data->InterruptTime.High2Time = irq.u.HighPart;
+     user_shared_data->SystemTime.LowPart = now.u.LowPart;
+     user_shared_data->SystemTime.High1Time = user_shared_data->SystemTime.High2Time = now.u.HighPart;
+     user_shared_data->u.TickCountQuad = (now.QuadPart - server_start_time) / 10000;
+@@ -298,6 +319,13 @@ HANDLE thread_init(void)
+ 
+     fill_cpu_info();
+ 
++    if(!(s = pthread_create(&thread, NULL, &shared_data_thread, NULL))) {
++        if(pthread_detach(thread))
++            FIXME("Unable to detach thread\n");
++    } else {
++        FIXME("unable to spawn thread: %s (%d)\n", strerror(s), s);
++    }
++
+     return exe_file;
+ }
+ 

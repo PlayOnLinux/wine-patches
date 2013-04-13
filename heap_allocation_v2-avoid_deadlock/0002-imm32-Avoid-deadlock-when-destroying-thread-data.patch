@@ -1,0 +1,25 @@
+From e2faf5e2bb041e4571619f65a3ff7c207e4013de Mon Sep 17 00:00:00 2001
+From: Andrea Canciani <ranma42@gmail.com>
+Date: Fri, 4 May 2012 19:18:31 +0200
+Subject: [PATCH 2/5] imm32: Avoid deadlock when destroying thread data
+
+TODO: investigate and understand better
+---
+ dlls/imm32/imm.c |    1 -
+ 1 files changed, 0 insertions(+), 1 deletions(-)
+
+diff --git a/dlls/imm32/imm.c b/dlls/imm32/imm.c
+index 7394101..8bf044a 100644
+--- a/dlls/imm32/imm.c
++++ b/dlls/imm32/imm.c
+@@ -676,7 +676,6 @@ static BOOL IMM_DestroyContext(HIMC hIMC)
+     {
+         data->immKbd->uSelected --;
+         data->immKbd->pImeSelect(hIMC, FALSE);
+-        SendMessageW(data->IMC.hWnd, WM_IME_SELECT, FALSE, (LPARAM)GetKeyboardLayout(0));
+ 
+         if (IMM_GetThreadData()->hwndDefault == data->imeWnd)
+             IMM_GetThreadData()->hwndDefault = NULL;
+-- 
+1.7.7.5 (Apple Git-26)
+
