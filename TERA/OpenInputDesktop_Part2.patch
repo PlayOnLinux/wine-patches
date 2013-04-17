@@ -1,0 +1,19 @@
+--- a/server/protocol.def
++++ b/server/protocol.def
+@@ -2666,6 +2666,16 @@
+ @END
+ 
+ 
++/* Open Input Desktop */
++@REQ(open_input_desktop)
++    unsigned int flags;           /* desktop flags */
++    unsigned int access;          /* wanted access rights */
++    unsigned int attributes;      /* object attributes */
++@REPLY
++    obj_handle_t handle;          /* handle to the desktop */
++@END
++
++
+ /* Get/set information about a user object (window station or desktop) */
+ @REQ(set_user_object_info)
+     obj_handle_t handle;          /* handle to the object */
