@@ -1,0 +1,13 @@
+diff --git a/dlls/ws2_32/socket.c b/dlls/ws2_32/socket.c
+index 6fd1e34..256e38f 100644
+--- a/dlls/ws2_32/socket.c
++++ b/dlls/ws2_32/socket.c
+@@ -5416,6 +5416,8 @@ INT WINAPI WSAAsyncSelect(SOCKET s, HWND hWnd, UINT uMsg, LONG lEvent)
+     int ret;
+ 
+     TRACE("%lx, hWnd %p, uMsg %08x, event %08x\n", s, hWnd, uMsg, lEvent);
++    //usleep(2000 + (rand() % 3000));
++    usleep(5000);
+ 
+     SERVER_START_REQ( set_socket_event )
+     {
