@@ -1,0 +1,13 @@
+--- dlls/user32/winstation_old.c	2013-04-12 20:35:09.000000000 +0200
++++ dlls/user32/winstation.c	2013-04-21 22:44:15.009693786 +0200
+@@ -462,9 +462,7 @@ BOOL WINAPI EnumDesktopsW( HWINSTA winst
+  */
+ HDESK WINAPI OpenInputDesktop( DWORD flags, BOOL inherit, ACCESS_MASK access )
+ {
+-    FIXME( "(%x,%i,%x): stub\n", flags, inherit, access );
+-    SetLastError( ERROR_CALL_NOT_IMPLEMENTED );
+-    return 0;
++return CreateDesktopA("Desktop", 0, 0, flags, access, 0);
+ }
+ 
+ 
