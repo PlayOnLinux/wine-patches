@@ -1,0 +1,185 @@
+--- wine-1.2-rc6/dlls/user32/painting.c	2010-07-02 19:24:56.000000000 +0200
++++ wine-1.2-rc6-starcraft/dlls/user32/painting.c	2010-07-09 19:44:25.383997187 +0200
+@@ -1145,6 +1145,12 @@
+     static const RECT empty;
+     BOOL ret;
+ 
++    /*# battle.net hack - force background erase on static items in "Create" menu */
++    char cname[100];
++    GetClassNameA(hwnd,cname,100);
++    if(!strncmp(cname,"SDlg",4)) flags = flags | RDW_ERASE;
++    /* battle.net hack #*/
++   
+     if (!hwnd) hwnd = GetDesktopWindow();
+ 
+     if (TRACE_ON(win))
+--- wine-1.5.1/dlls/ddraw/surface.c.orig	2012-03-30 14:17:55.000000000 -0400
++++ wine-1.5.1/dlls/ddraw/surface.c	2012-04-06 15:22:23.782482038 -0400
+@@ -108,6 +108,102 @@
+     return DD_OK;
+ }
+ 
++/*# battle.net hack, globals...*/
++BYTE bitsUpdated[640*480];
++BYTE* bitsDDraw;
++BOOL bLocked = FALSE;
++/* color not used in battle.net menus (?)*/
++BYTE cTransparent = 0xfd;
++BOOL bEnabled = TRUE;
++RGNDATA *pRgnData = NULL; 
++
++/* HRGN CreateMaskRgn (BYTE* inBits,BYTE* outBits,BYTE col)
++
++- clean-up allocated memory
++
++*/
++void DeleteMaskRgn (HRGN rgn)
++{
++  free(pRgnData);
++  pRgnData = NULL;
++  DeleteObject(rgn);
++}
++
++/* HRGN CreateMaskRgn (BYTE* inBits,BYTE* outBits,BYTE col)
++
++- updates outBits[] pixel buffer using inBits[] as input 
++- col = transparent color
++- returns the update region asociated with inBits[]
++
++! BOTTLENECK 
++
++*/
++HRGN CreateMaskRgn (BYTE* inBits,BYTE* outBits,BYTE col)
++{
++  int x,y,xStart;
++  long int nOffset = 0;
++  int nRects = 0;
++  RECT *pRects;
++  HRGN hrgnRes;
++
++  pRgnData = realloc(pRgnData,sizeof(RGNDATAHEADER) + (sizeof(RECT) * nRects));
++
++  pRgnData->rdh.dwSize = sizeof(RGNDATAHEADER);
++  pRgnData->rdh.iType = RDH_RECTANGLES;
++  pRgnData->rdh.nCount = pRgnData->rdh.nRgnSize = 0;
++  SetRect(&pRgnData->rdh.rcBound, MAXLONG, MAXLONG, 0, 0);
++
++  for (y = 0; y < 480; y++)
++    {
++      for (x = 0; x < 640; x++)
++	{
++	  xStart = x;
++	  while (x < 640)
++	    {
++		
++	      if (inBits[nOffset+x] == col)
++		break;
++	      else
++		 outBits[nOffset+x] = inBits[nOffset+x];
++		
++	      x++;
++	    }
++
++	  if (x > xStart)
++	    {
++	      nRects++;
++              pRgnData = realloc(pRgnData,sizeof(RGNDATAHEADER) + (sizeof(RECT) * nRects));
++	      pRects = (RECT *)&pRgnData->Buffer;
++
++	      SetRect(&pRects[pRgnData->rdh.nCount], xStart, y, x, y+1);
++
++	      if (xStart < pRgnData->rdh.rcBound.left)
++		pRgnData->rdh.rcBound.left = xStart;
++	      if (y < pRgnData->rdh.rcBound.top)
++		pRgnData->rdh.rcBound.top = y;
++	      if (x > pRgnData->rdh.rcBound.right)
++		pRgnData->rdh.rcBound.right = x;
++	      if (y+1 > pRgnData->rdh.rcBound.bottom)
++		pRgnData->rdh.rcBound.bottom = y+1;
++
++	      pRgnData->rdh.nCount++;
++
++	    }
++
++	}
++	
++	nOffset+=640;
++ 
++    }
++
++  hrgnRes = ExtCreateRegion(NULL, sizeof(RGNDATAHEADER) + (sizeof(RECT) * nRects), pRgnData);  
++
++  return hrgnRes;
++}
++
++/* battle.net hack #*/
++
++
+ /*****************************************************************************
+  * IUnknown parts follow
+  *****************************************************************************/
+@@ -987,6 +1083,22 @@
+             SetRect(&This->ddraw->primary_lock, 0, 0, This->surface_desc.dwWidth, This->surface_desc.dwHeight);
+     }
+ 
++    /*# battle.net hack - redirect ddraw surface update on bitsUpdated[] */
++    bLocked = FALSE;
++    /* lock only if we are in battle.net menu and Rect=NULL -> (0,0,640,480) */
++    if(FindWindowExA(NULL,NULL,"SDlgDialog",NULL) && Rect == NULL && bEnabled)
++    { 
++	/* fill bitsUpdated[] with transparent color */
++	memset(bitsUpdated,cTransparent,640*480);
++	/* backup the real lpSurface*/
++  	bitsDDraw = mapped_rect.data;
++	/* return bitsUpdated[] as lpSurface*/
++  	mapped_rect.data = bitsUpdated;
++  	bLocked = TRUE;
++    }
++    /* battle.net hack #*/
++
++
+     /* Override the memory area. The pitch should be set already. Strangely windows
+      * does not set the LPSURFACE flag on locked surfaces !?!.
+      * DDSD->dwFlags |= DDSD_LPSURFACE;
+@@ -1145,6 +1257,41 @@
+     }
+     wined3d_mutex_unlock();
+ 
++    /*# battle.net hack - update scren hdc and ddraw surface using bitsUpdated[]*/
++    /* check if bitsUpdated[] is valid */
++    if(bLocked)
++    {
++
++	HRGN rgnUpdate;
++	RECT rcBounding;
++    	HDC hdcScreen,hdcDDraw;
++
++	/* updates ddraw surface, returns clipping region for bitsUpdated[] */
++	rgnUpdate = CreateMaskRgn(bitsUpdated,bitsDDraw,cTransparent);
++	/* get bounding rect */
++	GetRgnBox(rgnUpdate,&rcBounding);
++	/* get screen dc */
++	hdcScreen = GetDCEx(NULL,NULL,DCX_WINDOW);
++	/* set clip region */
++	SelectClipRgn(hdcScreen, rgnUpdate);
++
++	/* get ddraw dc */
++    	IDirectDrawSurface_GetDC(iface,&hdcDDraw);
++
++	/* biblt from ddraw dc to screen dc 
++         ! BOTTLENECK 
++         */
++	if(hdcScreen && hdcDDraw) BitBlt(hdcScreen,rcBounding.left,rcBounding.top,\
++					rcBounding.right,rcBounding.bottom,hdcDDraw,\
++					rcBounding.left,rcBounding.top,SRCCOPY);
++
++	/* clean-up */
++ 	ReleaseDC(NULL,hdcScreen);
++    	IDirectDrawSurface_ReleaseDC(iface,hdcDDraw);
++	DeleteMaskRgn(rgnUpdate);	
++    }
++    /* battle.net hack #*/
++
+     return hr;
+ }
+ 
