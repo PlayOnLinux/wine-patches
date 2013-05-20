@@ -55,7 +55,7 @@ echo "Almost done, adding files to git for you and commiting."
 git add "$folder"
 git add todo.lst
 git add todo_linux-x86.lst todo_linux-amd64.lst todo_darwin-x86.lst
-if [ -z $message ] ; then
+if [ -z "$message" ] ; then
 	git commit -m "Adding patches $folder for wine $winev."
 else
 	git commit -m "Adding patches $folder for wine $winev. Comment is: $message"
