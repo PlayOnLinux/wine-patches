@@ -43,10 +43,14 @@ if [ $list -lt 1 ] ; then
 	exit
 fi
 echo "Seems good, adding Wine-$winev as $folder with $list patche(s)"
+#all todo, regardless arch/os
 echo "wine-$winev	$folder" >> todo.lst
-cp todo.lst todo_darwin-x86.lst
-cp todo.lst todo_linux-amd64.lst
-cp todo.lst todo_linux-x86.lst
+
+#todo for specific arch/os
+echo "wine-$winev	$folder" >> todo_darwin-x86.lst
+echo "wine-$winev	$folder" >> todo_linux-amd64.lst
+echo "wine-$winev	$folder" >> todo_linux-x86.lst
+
 echo "Almost done, adding files to git for you and commiting."
 git add "$folder"
 git add todo.lst
