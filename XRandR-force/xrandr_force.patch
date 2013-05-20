@@ -1,0 +1,71 @@
+diff -Npru wine-1.5.25.orig/dlls/winex11.drv/x11drv.h wine-1.5.25/dlls/winex11.drv/x11drv.h
+--- wine-1.5.25.orig/dlls/winex11.drv/x11drv.h	2013-05-19 10:12:26.459743420 +0200
++++ wine-1.5.25/dlls/winex11.drv/x11drv.h	2013-05-19 10:13:19.784741671 +0200
+@@ -370,6 +370,7 @@ extern unsigned int screen_bpp DECLSPEC_
+ extern RECT virtual_screen_rect DECLSPEC_HIDDEN;
+ extern int use_xkb DECLSPEC_HIDDEN;
+ extern int usexrandr DECLSPEC_HIDDEN;
++extern int forcexrandr10 DECLSPEC_HIDDEN;
+ extern int usexvidmode DECLSPEC_HIDDEN;
+ extern BOOL ximInComposeMode DECLSPEC_HIDDEN;
+ extern int use_take_focus DECLSPEC_HIDDEN;
+diff -Npru wine-1.5.25.orig/dlls/winex11.drv/x11drv_main.c wine-1.5.25/dlls/winex11.drv/x11drv_main.c
+--- wine-1.5.25.orig/dlls/winex11.drv/x11drv_main.c	2013-05-19 10:12:26.458743419 +0200
++++ wine-1.5.25/dlls/winex11.drv/x11drv_main.c	2013-05-19 10:39:48.763916656 +0200
+@@ -67,6 +67,7 @@ RECT virtual_screen_rect;
+ Window root_window;
+ int usexvidmode = 1;
+ int usexrandr = 1;
++int forcexrandr10 = 0;
+ int usexcomposite = 1;
+ int use_xkb = 1;
+ int use_take_focus = 1;
+@@ -367,6 +368,9 @@ static void setup_options(void)
+ 
+     if (!get_config_key( hkey, appkey, "UseXRandR", buffer, sizeof(buffer) ))
+         usexrandr = IS_OPTION_TRUE( buffer[0] );
++    
++    if (!get_config_key( hkey, appkey, "ForceXRandR10", buffer, sizeof(buffer) ))
++        forcexrandr10 = IS_OPTION_TRUE( buffer[0] );
+ 
+     if (!get_config_key( hkey, appkey, "UseTakeFocus", buffer, sizeof(buffer) ))
+         use_take_focus = IS_OPTION_TRUE( buffer[0] );
+diff -Npru wine-1.5.25.orig/dlls/winex11.drv/xrandr.c wine-1.5.25/dlls/winex11.drv/xrandr.c
+--- wine-1.5.25.orig/dlls/winex11.drv/xrandr.c	2013-05-19 10:12:26.459743420 +0200
++++ wine-1.5.25/dlls/winex11.drv/xrandr.c	2013-05-19 10:42:30.576903486 +0200
+@@ -499,18 +499,27 @@ void X11DRV_XRandR_Init(void)
+ 
+     TRACE("Found XRandR %d.%d.\n", major, minor);
+ 
+-#ifdef HAVE_XRRGETSCREENRESOURCES
+-    if (ret >= 2 && (major > 1 || (major == 1 && minor >= 2)))
++    if (!forcexrandr10)
+     {
+-        if (major > 1 || (major == 1 && minor >= 3))
+-            pXRRGetScreenResourcesCurrent = wine_dlsym( xrandr_handle, "XRRGetScreenResourcesCurrent", NULL, 0 );
+-        if (!pXRRGetScreenResourcesCurrent)
+-            pXRRGetScreenResourcesCurrent = pXRRGetScreenResources;
+-    }
+ 
+-    if (!pXRRGetScreenResourcesCurrent || xrandr12_init_modes() < 0)
++#ifdef HAVE_XRRGETSCREENRESOURCES
++        if (ret >= 2 && (major > 1 || (major == 1 && minor >= 2)))
++        {
++            if (major > 1 || (major == 1 && minor >= 3))
++                pXRRGetScreenResourcesCurrent = wine_dlsym( xrandr_handle, "XRRGetScreenResourcesCurrent", NULL, 0 );
++            if (!pXRRGetScreenResourcesCurrent)
++                pXRRGetScreenResourcesCurrent = pXRRGetScreenResources;
++        }
++
++        if (!pXRRGetScreenResourcesCurrent || xrandr12_init_modes() < 0)
+ #endif
++            xrandr10_init_modes();
++    }
++    else
++    {
++        TRACE("Forcing XRandR 1.0 as requested.\n");
+         xrandr10_init_modes();
++    }
+ }
+ 
+ #else /* SONAME_LIBXRANDR */
