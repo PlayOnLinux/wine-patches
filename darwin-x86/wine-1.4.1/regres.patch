@@ -1,0 +1,473 @@
+diff --git a/configure b/configure
+index 465bdc4..fcf6de5 100755
+--- a/configure
++++ b/configure
+@@ -2934,7 +2934,7 @@ do
+   IFS=$as_save_IFS
+   test -z "$as_dir" && as_dir=.
+     for ac_exec_ext in '' $ac_executable_extensions; do
+-  if as_fn_executable_p "$as_dir/$ac_word$ac_exec_ext"; then
++  if { test -f "$as_dir/$ac_word$ac_exec_ext" && $as_test_x "$as_dir/$ac_word$ac_exec_ext"; }; then
+     ac_cv_prog_CC="${ac_tool_prefix}gcc"
+     $as_echo "$as_me:${as_lineno-$LINENO}: found $as_dir/$ac_word$ac_exec_ext" >&5
+     break 2
+@@ -2974,7 +2974,7 @@ do
+   IFS=$as_save_IFS
+   test -z "$as_dir" && as_dir=.
+     for ac_exec_ext in '' $ac_executable_extensions; do
+-  if as_fn_executable_p "$as_dir/$ac_word$ac_exec_ext"; then
++  if { test -f "$as_dir/$ac_word$ac_exec_ext" && $as_test_x "$as_dir/$ac_word$ac_exec_ext"; }; then
+     ac_cv_prog_ac_ct_CC="gcc"
+     $as_echo "$as_me:${as_lineno-$LINENO}: found $as_dir/$ac_word$ac_exec_ext" >&5
+     break 2
+@@ -3027,7 +3027,7 @@ do
+   IFS=$as_save_IFS
+   test -z "$as_dir" && as_dir=.
+     for ac_exec_ext in '' $ac_executable_extensions; do
+-  if as_fn_executable_p "$as_dir/$ac_word$ac_exec_ext"; then
++  if { test -f "$as_dir/$ac_word$ac_exec_ext" && $as_test_x "$as_dir/$ac_word$ac_exec_ext"; }; then
+     ac_cv_prog_CC="${ac_tool_prefix}cc"
+     $as_echo "$as_me:${as_lineno-$LINENO}: found $as_dir/$ac_word$ac_exec_ext" >&5
+     break 2
+@@ -3068,7 +3068,7 @@ do
+   IFS=$as_save_IFS
+   test -z "$as_dir" && as_dir=.
+     for ac_exec_ext in '' $ac_executable_extensions; do
+-  if as_fn_executable_p "$as_dir/$ac_word$ac_exec_ext"; then
++  if { test -f "$as_dir/$ac_word$ac_exec_ext" && $as_test_x "$as_dir/$ac_word$ac_exec_ext"; }; then
+     if test "$as_dir/$ac_word$ac_exec_ext" = "/usr/ucb/cc"; then
+        ac_prog_rejected=yes
+        continue
+@@ -3126,7 +3126,7 @@ do
+   IFS=$as_save_IFS
+   test -z "$as_dir" && as_dir=.
+     for ac_exec_ext in '' $ac_executable_extensions; do
+-  if as_fn_executable_p "$as_dir/$ac_word$ac_exec_ext"; then
++  if { test -f "$as_dir/$ac_word$ac_exec_ext" && $as_test_x "$as_dir/$ac_word$ac_exec_ext"; }; then
+     ac_cv_prog_CC="$ac_tool_prefix$ac_prog"
+     $as_echo "$as_me:${as_lineno-$LINENO}: found $as_dir/$ac_word$ac_exec_ext" >&5
+     break 2
+@@ -3170,7 +3170,7 @@ do
+   IFS=$as_save_IFS
+   test -z "$as_dir" && as_dir=.
+     for ac_exec_ext in '' $ac_executable_extensions; do
+-  if as_fn_executable_p "$as_dir/$ac_word$ac_exec_ext"; then
++  if { test -f "$as_dir/$ac_word$ac_exec_ext" && $as_test_x "$as_dir/$ac_word$ac_exec_ext"; }; then
+     ac_cv_prog_ac_ct_CC="$ac_prog"
+     $as_echo "$as_me:${as_lineno-$LINENO}: found $as_dir/$ac_word$ac_exec_ext" >&5
+     break 2
+@@ -3616,7 +3616,9 @@ cat confdefs.h - <<_ACEOF >conftest.$ac_ext
+ /* end confdefs.h.  */
+ #include <stdarg.h>
+ #include <stdio.h>
+-struct stat;
++#include <sys/types.h>
++#include <sys/stat.h>
++
+ /* Most of the following tests are stolen from RCS 5.7's src/conf.sh.  */
+ struct buf { int x; };
+ FILE * (*rcsopen) (struct buf *, struct stat *, int);
+@@ -3729,7 +3731,7 @@ do
+   IFS=$as_save_IFS
+   test -z "$as_dir" && as_dir=.
+     for ac_exec_ext in '' $ac_executable_extensions; do
+-  if as_fn_executable_p "$as_dir/$ac_word$ac_exec_ext"; then
++  if { test -f "$as_dir/$ac_word$ac_exec_ext" && $as_test_x "$as_dir/$ac_word$ac_exec_ext"; }; then
+     ac_cv_prog_CXX="$ac_tool_prefix$ac_prog"
+     $as_echo "$as_me:${as_lineno-$LINENO}: found $as_dir/$ac_word$ac_exec_ext" >&5
+     break 2
+@@ -3773,7 +3775,7 @@ do
+   IFS=$as_save_IFS
+   test -z "$as_dir" && as_dir=.
+     for ac_exec_ext in '' $ac_executable_extensions; do
+-  if as_fn_executable_p "$as_dir/$ac_word$ac_exec_ext"; then
++  if { test -f "$as_dir/$ac_word$ac_exec_ext" && $as_test_x "$as_dir/$ac_word$ac_exec_ext"; }; then
+     ac_cv_prog_ac_ct_CXX="$ac_prog"
+     $as_echo "$as_me:${as_lineno-$LINENO}: found $as_dir/$ac_word$ac_exec_ext" >&5
+     break 2
+@@ -3975,7 +3977,7 @@ do
+   IFS=$as_save_IFS
+   test -z "$as_dir" && as_dir=.
+     for ac_exec_ext in '' $ac_executable_extensions; do
+-  if as_fn_executable_p "$as_dir/$ac_word$ac_exec_ext"; then
++  if { test -f "$as_dir/$ac_word$ac_exec_ext" && $as_test_x "$as_dir/$ac_word$ac_exec_ext"; }; then
+     ac_cv_prog_CPPBIN="${ac_tool_prefix}cpp"
+     $as_echo "$as_me:${as_lineno-$LINENO}: found $as_dir/$ac_word$ac_exec_ext" >&5
+     break 2
+@@ -4015,7 +4017,7 @@ do
+   IFS=$as_save_IFS
+   test -z "$as_dir" && as_dir=.
+     for ac_exec_ext in '' $ac_executable_extensions; do
+-  if as_fn_executable_p "$as_dir/$ac_word$ac_exec_ext"; then
++  if { test -f "$as_dir/$ac_word$ac_exec_ext" && $as_test_x "$as_dir/$ac_word$ac_exec_ext"; }; then
+     ac_cv_prog_ac_ct_CPPBIN="cpp"
+     $as_echo "$as_me:${as_lineno-$LINENO}: found $as_dir/$ac_word$ac_exec_ext" >&5
+     break 2
+@@ -4250,7 +4252,7 @@ do
+   IFS=$as_save_IFS
+   test -z "$as_dir" && as_dir=.
+     for ac_exec_ext in '' $ac_executable_extensions; do
+-  if as_fn_executable_p "$as_dir/$ac_word$ac_exec_ext"; then
++  if { test -f "$as_dir/$ac_word$ac_exec_ext" && $as_test_x "$as_dir/$ac_word$ac_exec_ext"; }; then
+     ac_cv_prog_FLEX="$ac_prog"
+     $as_echo "$as_me:${as_lineno-$LINENO}: found $as_dir/$ac_word$ac_exec_ext" >&5
+     break 2
+@@ -4315,7 +4317,7 @@ do
+   IFS=$as_save_IFS
+   test -z "$as_dir" && as_dir=.
+     for ac_exec_ext in '' $ac_executable_extensions; do
+-  if as_fn_executable_p "$as_dir/$ac_word$ac_exec_ext"; then
++  if { test -f "$as_dir/$ac_word$ac_exec_ext" && $as_test_x "$as_dir/$ac_word$ac_exec_ext"; }; then
+     ac_cv_prog_BISON="$ac_prog"
+     $as_echo "$as_me:${as_lineno-$LINENO}: found $as_dir/$ac_word$ac_exec_ext" >&5
+     break 2
+@@ -4364,7 +4366,7 @@ do
+   IFS=$as_save_IFS
+   test -z "$as_dir" && as_dir=.
+     for ac_exec_ext in '' $ac_executable_extensions; do
+-  if as_fn_executable_p "$as_dir/$ac_word$ac_exec_ext"; then
++  if { test -f "$as_dir/$ac_word$ac_exec_ext" && $as_test_x "$as_dir/$ac_word$ac_exec_ext"; }; then
+     ac_cv_prog_AR="$ac_tool_prefix$ac_prog"
+     $as_echo "$as_me:${as_lineno-$LINENO}: found $as_dir/$ac_word$ac_exec_ext" >&5
+     break 2
+@@ -4408,7 +4410,7 @@ do
+   IFS=$as_save_IFS
+   test -z "$as_dir" && as_dir=.
+     for ac_exec_ext in '' $ac_executable_extensions; do
+-  if as_fn_executable_p "$as_dir/$ac_word$ac_exec_ext"; then
++  if { test -f "$as_dir/$ac_word$ac_exec_ext" && $as_test_x "$as_dir/$ac_word$ac_exec_ext"; }; then
+     ac_cv_prog_ac_ct_AR="$ac_prog"
+     $as_echo "$as_me:${as_lineno-$LINENO}: found $as_dir/$ac_word$ac_exec_ext" >&5
+     break 2
+@@ -4464,7 +4466,7 @@ do
+   IFS=$as_save_IFS
+   test -z "$as_dir" && as_dir=.
+     for ac_exec_ext in '' $ac_executable_extensions; do
+-  if as_fn_executable_p "$as_dir/$ac_word$ac_exec_ext"; then
++  if { test -f "$as_dir/$ac_word$ac_exec_ext" && $as_test_x "$as_dir/$ac_word$ac_exec_ext"; }; then
+     ac_cv_prog_RANLIB="${ac_tool_prefix}ranlib"
+     $as_echo "$as_me:${as_lineno-$LINENO}: found $as_dir/$ac_word$ac_exec_ext" >&5
+     break 2
+@@ -4504,7 +4506,7 @@ do
+   IFS=$as_save_IFS
+   test -z "$as_dir" && as_dir=.
+     for ac_exec_ext in '' $ac_executable_extensions; do
+-  if as_fn_executable_p "$as_dir/$ac_word$ac_exec_ext"; then
++  if { test -f "$as_dir/$ac_word$ac_exec_ext" && $as_test_x "$as_dir/$ac_word$ac_exec_ext"; }; then
+     ac_cv_prog_ac_ct_RANLIB="ranlib"
+     $as_echo "$as_me:${as_lineno-$LINENO}: found $as_dir/$ac_word$ac_exec_ext" >&5
+     break 2
+@@ -4698,7 +4700,7 @@ do
+   IFS=$as_save_IFS
+   test -z "$as_dir" && as_dir=.
+     for ac_exec_ext in '' $ac_executable_extensions; do
+-  if as_fn_executable_p "$as_dir/$ac_word$ac_exec_ext"; then
++  if { test -f "$as_dir/$ac_word$ac_exec_ext" && $as_test_x "$as_dir/$ac_word$ac_exec_ext"; }; then
+     ac_cv_path_LDCONFIG="$as_dir/$ac_word$ac_exec_ext"
+     $as_echo "$as_me:${as_lineno-$LINENO}: found $as_dir/$ac_word$ac_exec_ext" >&5
+     break 2
+@@ -4837,7 +4839,7 @@ do
+   IFS=$as_save_IFS
+   test -z "$as_dir" && as_dir=.
+     for ac_exec_ext in '' $ac_executable_extensions; do
+-  if as_fn_executable_p "$as_dir/$ac_word$ac_exec_ext"; then
++  if { test -f "$as_dir/$ac_word$ac_exec_ext" && $as_test_x "$as_dir/$ac_word$ac_exec_ext"; }; then
+     ac_cv_prog_LINT="$ac_prog"
+     $as_echo "$as_me:${as_lineno-$LINENO}: found $as_dir/$ac_word$ac_exec_ext" >&5
+     break 2
+@@ -4885,7 +4887,7 @@ do
+   IFS=$as_save_IFS
+   test -z "$as_dir" && as_dir=.
+     for ac_exec_ext in '' $ac_executable_extensions; do
+-  if as_fn_executable_p "$as_dir/$ac_word$ac_exec_ext"; then
++  if { test -f "$as_dir/$ac_word$ac_exec_ext" && $as_test_x "$as_dir/$ac_word$ac_exec_ext"; }; then
+     ac_cv_prog_FONTFORGE="$ac_prog"
+     $as_echo "$as_me:${as_lineno-$LINENO}: found $as_dir/$ac_word$ac_exec_ext" >&5
+     break 2
+@@ -4928,7 +4930,7 @@ do
+   IFS=$as_save_IFS
+   test -z "$as_dir" && as_dir=.
+     for ac_exec_ext in '' $ac_executable_extensions; do
+-  if as_fn_executable_p "$as_dir/$ac_word$ac_exec_ext"; then
++  if { test -f "$as_dir/$ac_word$ac_exec_ext" && $as_test_x "$as_dir/$ac_word$ac_exec_ext"; }; then
+     ac_cv_prog_PKG_CONFIG="$ac_prog"
+     $as_echo "$as_me:${as_lineno-$LINENO}: found $as_dir/$ac_word$ac_exec_ext" >&5
+     break 2
+@@ -4971,7 +4973,7 @@ do
+   IFS=$as_save_IFS
+   test -z "$as_dir" && as_dir=.
+     for ac_exec_ext in '' $ac_executable_extensions; do
+-  if as_fn_executable_p "$as_dir/$ac_word$ac_exec_ext"; then
++  if { test -f "$as_dir/$ac_word$ac_exec_ext" && $as_test_x "$as_dir/$ac_word$ac_exec_ext"; }; then
+     ac_cv_prog_RSVG="$ac_prog"
+     $as_echo "$as_me:${as_lineno-$LINENO}: found $as_dir/$ac_word$ac_exec_ext" >&5
+     break 2
+@@ -5014,7 +5016,7 @@ do
+   IFS=$as_save_IFS
+   test -z "$as_dir" && as_dir=.
+     for ac_exec_ext in '' $ac_executable_extensions; do
+-  if as_fn_executable_p "$as_dir/$ac_word$ac_exec_ext"; then
++  if { test -f "$as_dir/$ac_word$ac_exec_ext" && $as_test_x "$as_dir/$ac_word$ac_exec_ext"; }; then
+     ac_cv_prog_CONVERT="$ac_prog"
+     $as_echo "$as_me:${as_lineno-$LINENO}: found $as_dir/$ac_word$ac_exec_ext" >&5
+     break 2
+@@ -5057,7 +5059,7 @@ do
+   IFS=$as_save_IFS
+   test -z "$as_dir" && as_dir=.
+     for ac_exec_ext in '' $ac_executable_extensions; do
+-  if as_fn_executable_p "$as_dir/$ac_word$ac_exec_ext"; then
++  if { test -f "$as_dir/$ac_word$ac_exec_ext" && $as_test_x "$as_dir/$ac_word$ac_exec_ext"; }; then
+     ac_cv_prog_ICOTOOL="$ac_prog"
+     $as_echo "$as_me:${as_lineno-$LINENO}: found $as_dir/$ac_word$ac_exec_ext" >&5
+     break 2
+@@ -5100,7 +5102,7 @@ do
+   IFS=$as_save_IFS
+   test -z "$as_dir" && as_dir=.
+     for ac_exec_ext in '' $ac_executable_extensions; do
+-  if as_fn_executable_p "$as_dir/$ac_word$ac_exec_ext"; then
++  if { test -f "$as_dir/$ac_word$ac_exec_ext" && $as_test_x "$as_dir/$ac_word$ac_exec_ext"; }; then
+     ac_cv_prog_MSGFMT="$ac_prog"
+     $as_echo "$as_me:${as_lineno-$LINENO}: found $as_dir/$ac_word$ac_exec_ext" >&5
+     break 2
+@@ -6304,7 +6306,7 @@ do
+   IFS=$as_save_IFS
+   test -z "$as_dir" && as_dir=.
+     for ac_exec_ext in '' $ac_executable_extensions; do
+-  if as_fn_executable_p "$as_dir/$ac_word$ac_exec_ext"; then
++  if { test -f "$as_dir/$ac_word$ac_exec_ext" && $as_test_x "$as_dir/$ac_word$ac_exec_ext"; }; then
+     ac_cv_path_LDD="$as_dir/$ac_word$ac_exec_ext"
+     $as_echo "$as_me:${as_lineno-$LINENO}: found $as_dir/$ac_word$ac_exec_ext" >&5
+     break 2
+@@ -6347,7 +6349,7 @@ do
+   IFS=$as_save_IFS
+   test -z "$as_dir" && as_dir=.
+     for ac_exec_ext in '' $ac_executable_extensions; do
+-  if as_fn_executable_p "$as_dir/$ac_word$ac_exec_ext"; then
++  if { test -f "$as_dir/$ac_word$ac_exec_ext" && $as_test_x "$as_dir/$ac_word$ac_exec_ext"; }; then
+     ac_cv_prog_DLLTOOL="${ac_tool_prefix}dlltool"
+     $as_echo "$as_me:${as_lineno-$LINENO}: found $as_dir/$ac_word$ac_exec_ext" >&5
+     break 2
+@@ -6387,7 +6389,7 @@ do
+   IFS=$as_save_IFS
+   test -z "$as_dir" && as_dir=.
+     for ac_exec_ext in '' $ac_executable_extensions; do
+-  if as_fn_executable_p "$as_dir/$ac_word$ac_exec_ext"; then
++  if { test -f "$as_dir/$ac_word$ac_exec_ext" && $as_test_x "$as_dir/$ac_word$ac_exec_ext"; }; then
+     ac_cv_prog_ac_ct_DLLTOOL="dlltool"
+     $as_echo "$as_me:${as_lineno-$LINENO}: found $as_dir/$ac_word$ac_exec_ext" >&5
+     break 2
+@@ -6439,7 +6441,7 @@ do
+   IFS=$as_save_IFS
+   test -z "$as_dir" && as_dir=.
+     for ac_exec_ext in '' $ac_executable_extensions; do
+-  if as_fn_executable_p "$as_dir/$ac_word$ac_exec_ext"; then
++  if { test -f "$as_dir/$ac_word$ac_exec_ext" && $as_test_x "$as_dir/$ac_word$ac_exec_ext"; }; then
+     ac_cv_prog_DLLWRAP="${ac_tool_prefix}dllwrap"
+     $as_echo "$as_me:${as_lineno-$LINENO}: found $as_dir/$ac_word$ac_exec_ext" >&5
+     break 2
+@@ -6479,7 +6481,7 @@ do
+   IFS=$as_save_IFS
+   test -z "$as_dir" && as_dir=.
+     for ac_exec_ext in '' $ac_executable_extensions; do
+-  if as_fn_executable_p "$as_dir/$ac_word$ac_exec_ext"; then
++  if { test -f "$as_dir/$ac_word$ac_exec_ext" && $as_test_x "$as_dir/$ac_word$ac_exec_ext"; }; then
+     ac_cv_prog_ac_ct_DLLWRAP="dllwrap"
+     $as_echo "$as_me:${as_lineno-$LINENO}: found $as_dir/$ac_word$ac_exec_ext" >&5
+     break 2
+@@ -6830,7 +6832,8 @@ if test $ac_cv_cflags__fPIC__shared__Wl__Bsymbolic__init___wine_spec_init__fini_
+ fi
+ 
+       echo '{ global: *; };' >conftest.map
+-      { $as_echo "$as_me:${as_lineno-$LINENO}: checking whether the compiler supports -fPIC -shared -Wl,--version-script=conftest.map" >&5
++      as_ac_var=`$as_echo "ac_cv_cflags_-fPIC -shared -Wl,--version-script=conftest.map" | $as_tr_sh`
++	{ $as_echo "$as_me:${as_lineno-$LINENO}: checking whether the compiler supports -fPIC -shared -Wl,--version-script=conftest.map" >&5
+ $as_echo_n "checking whether the compiler supports -fPIC -shared -Wl,--version-script=conftest.map... " >&6; }
+ if ${ac_cv_cflags__fPIC__shared__Wl___version_script_conftest_map+:} false; then :
+   $as_echo_n "(cached) " >&6
+@@ -6850,9 +6853,10 @@ rm -f core conftest.err conftest.$ac_objext \
+     conftest$ac_exeext conftest.$ac_ext
+ CFLAGS=$ac_wine_try_cflags_saved
+ fi
+-{ $as_echo "$as_me:${as_lineno-$LINENO}: result: $ac_cv_cflags__fPIC__shared__Wl___version_script_conftest_map" >&5
+-$as_echo "$ac_cv_cflags__fPIC__shared__Wl___version_script_conftest_map" >&6; }
+-if test $ac_cv_cflags__fPIC__shared__Wl___version_script_conftest_map = yes; then :
++eval ac_res=\$$as_ac_var
++	       { $as_echo "$as_me:${as_lineno-$LINENO}: result: $ac_res" >&5
++$as_echo "$ac_res" >&6; }
++if test `eval 'as_val=${'$as_ac_var'};$as_echo "$as_val"'` = yes; then :
+   LDSHARED="$LDSHARED \$(VERSCRIPT:%=-Wl,--version-script=%)"
+ fi
+       rm -f conftest.map
+@@ -6970,9 +6974,10 @@ fi
+ 
+       case $host_cpu in
+         *i[3456789]86* | x86_64)
+-          { $as_echo "$as_me:${as_lineno-$LINENO}: checking whether the compiler supports -Wl,--section-start,.interp=0x7bf00400" >&5
++          as_ac_var=`$as_echo "ac_cv_cflags_-Wl,--section-start,.interp=0x7bf00400" | $as_tr_sh`
++{ $as_echo "$as_me:${as_lineno-$LINENO}: checking whether the compiler supports -Wl,--section-start,.interp=0x7bf00400" >&5
+ $as_echo_n "checking whether the compiler supports -Wl,--section-start,.interp=0x7bf00400... " >&6; }
+-if ${ac_cv_cflags__Wl___section_start__interp_0x7bf00400+:} false; then :
++if eval \${$as_ac_var+:} false; then :
+   $as_echo_n "(cached) " >&6
+ else
+   ac_wine_try_cflags_saved=$CFLAGS
+@@ -6982,9 +6987,9 @@ cat confdefs.h - <<_ACEOF >conftest.$ac_ext
+ int main(int argc, char **argv) { return 0; }
+ _ACEOF
+ if ac_fn_c_try_link "$LINENO"; then :
+-  ac_cv_cflags__Wl___section_start__interp_0x7bf00400=yes
++  eval "$as_ac_var=yes"
+ else
+-  ac_cv_cflags__Wl___section_start__interp_0x7bf00400=no
++  eval "$as_ac_var=no"
+ fi
+ rm -f core conftest.err conftest.$ac_objext \
+     conftest$ac_exeext conftest.$ac_ext
+@@ -7017,7 +7022,7 @@ do
+   IFS=$as_save_IFS
+   test -z "$as_dir" && as_dir=.
+     for ac_exec_ext in '' $ac_executable_extensions; do
+-  if as_fn_executable_p "$as_dir/$ac_word$ac_exec_ext"; then
++  if { test -f "$as_dir/$ac_word$ac_exec_ext" && $as_test_x "$as_dir/$ac_word$ac_exec_ext"; }; then
+     ac_cv_path_PRELINK="$as_dir/$ac_word$ac_exec_ext"
+     $as_echo "$as_me:${as_lineno-$LINENO}: found $as_dir/$ac_word$ac_exec_ext" >&5
+     break 2
+@@ -7152,7 +7157,7 @@ do
+   IFS=$as_save_IFS
+   test -z "$as_dir" && as_dir=.
+     for ac_exec_ext in '' $ac_executable_extensions; do
+-  if as_fn_executable_p "$as_dir/$ac_word$ac_exec_ext"; then
++  if { test -f "$as_dir/$ac_word$ac_exec_ext" && $as_test_x "$as_dir/$ac_word$ac_exec_ext"; }; then
+     ac_cv_prog_CROSSCC="$ac_prog"
+     $as_echo "$as_me:${as_lineno-$LINENO}: found $as_dir/$ac_word$ac_exec_ext" >&5
+     break 2
+@@ -9896,7 +9901,7 @@ do
+   IFS=$as_save_IFS
+   test -z "$as_dir" && as_dir=.
+     for ac_exec_ext in '' $ac_executable_extensions; do
+-  if as_fn_executable_p "$as_dir/$ac_word$ac_exec_ext"; then
++  if { test -f "$as_dir/$ac_word$ac_exec_ext" && $as_test_x "$as_dir/$ac_word$ac_exec_ext"; }; then
+     ac_cv_prog_sane_devel="sane-config"
+     $as_echo "$as_me:${as_lineno-$LINENO}: found $as_dir/$ac_word$ac_exec_ext" >&5
+     break 2
+@@ -10072,7 +10077,7 @@ do
+   IFS=$as_save_IFS
+   test -z "$as_dir" && as_dir=.
+     for ac_exec_ext in '' $ac_executable_extensions; do
+-  if as_fn_executable_p "$as_dir/$ac_word$ac_exec_ext"; then
++  if { test -f "$as_dir/$ac_word$ac_exec_ext" && $as_test_x "$as_dir/$ac_word$ac_exec_ext"; }; then
+     ac_cv_prog_gphoto2_devel="gphoto2-config"
+     $as_echo "$as_me:${as_lineno-$LINENO}: found $as_dir/$ac_word$ac_exec_ext" >&5
+     break 2
+@@ -10110,7 +10115,7 @@ do
+   IFS=$as_save_IFS
+   test -z "$as_dir" && as_dir=.
+     for ac_exec_ext in '' $ac_executable_extensions; do
+-  if as_fn_executable_p "$as_dir/$ac_word$ac_exec_ext"; then
++  if { test -f "$as_dir/$ac_word$ac_exec_ext" && $as_test_x "$as_dir/$ac_word$ac_exec_ext"; }; then
+     ac_cv_prog_gphoto2port_devel="gphoto2-port-config"
+     $as_echo "$as_me:${as_lineno-$LINENO}: found $as_dir/$ac_word$ac_exec_ext" >&5
+     break 2
+@@ -10327,7 +10332,7 @@ do
+   IFS=$as_save_IFS
+   test -z "$as_dir" && as_dir=.
+     for ac_exec_ext in '' $ac_executable_extensions; do
+-  if as_fn_executable_p "$as_dir/$ac_word$ac_exec_ext"; then
++  if { test -f "$as_dir/$ac_word$ac_exec_ext" && $as_test_x "$as_dir/$ac_word$ac_exec_ext"; }; then
+     ac_cv_prog_ft_devel="$ac_prog"
+     $as_echo "$as_me:${as_lineno-$LINENO}: found $as_dir/$ac_word$ac_exec_ext" >&5
+     break 2
+@@ -14087,33 +14092,6 @@ _ACEOF
+ fi
+ 
+ 
+-ac_fn_c_check_member "$LINENO" "struct ipstat" "ips_total" "ac_cv_member_struct_ipstat_ips_total" "#ifdef HAVE_NETINET_IP_VAR_H
+-#include <netinet/ip_var.h>
+-#endif
+-"
+-if test "x$ac_cv_member_struct_ipstat_ips_total" = xyes; then :
+-
+-cat >>confdefs.h <<_ACEOF
+-#define HAVE_STRUCT_IPSTAT_IPS_TOTAL 1
+-_ACEOF
+-
+-
+-fi
+-
+-
+-ac_fn_c_check_member "$LINENO" "struct ip_stats" "ips_total" "ac_cv_member_struct_ip_stats_ips_total" "#ifdef HAVE_NETINET_IP_VAR_H
+-#include <netinet/ip_var.h>
+-#endif
+-"
+-if test "x$ac_cv_member_struct_ip_stats_ips_total" = xyes; then :
+-
+-cat >>confdefs.h <<_ACEOF
+-#define HAVE_STRUCT_IP_STATS_IPS_TOTAL 1
+-_ACEOF
+-
+-
+-fi
+-
+ 
+ ac_fn_c_check_member "$LINENO" "struct tcpstat" "tcps_connattempt" "ac_cv_member_struct_tcpstat_tcps_connattempt" "#ifdef HAVE_NETINET_TCP_VAR_H
+ #include <netinet/tcp_var.h>
+diff --git a/configure.ac b/configure.ac
+index 1753e14..9671b78 100644
+--- a/configure.ac
++++ b/configure.ac
+@@ -2324,18 +2324,6 @@ AC_CHECK_MEMBERS([struct icmpstat.icps_outhist],,,
+ #include <netinet/icmp_var.h>
+ #endif])
+ 
+-dnl Check for struct ipstat
+-AC_CHECK_MEMBERS([struct ipstat.ips_total],,,
+-[#ifdef HAVE_NETINET_IP_VAR_H
+-#include <netinet/ip_var.h>
+-#endif])
+-
+-dnl Check for struct ip_stats
+-AC_CHECK_MEMBERS([struct ip_stats.ips_total],,,
+-[#ifdef HAVE_NETINET_IP_VAR_H
+-#include <netinet/ip_var.h>
+-#endif])
+-
+ dnl Check for struct tcpstat
+ AC_CHECK_MEMBERS([struct tcpstat.tcps_connattempt],,,
+ [#ifdef HAVE_NETINET_TCP_VAR_H
+diff --git a/dlls/iphlpapi/ipstats.c b/dlls/iphlpapi/ipstats.c
+index 2f8ec90..244404c 100644
+--- a/dlls/iphlpapi/ipstats.c
++++ b/dlls/iphlpapi/ipstats.c
+@@ -659,16 +659,12 @@ DWORD WINAPI GetIpStatistics(PMIB_IPSTATS stats)
+         }
+         if (kc) kstat_close( kc );
+     }
+-#elif defined(HAVE_SYS_SYSCTL_H) && defined(IPCTL_STATS) && (defined(HAVE_STRUCT_IPSTAT_IPS_TOTAL) || defined(HAVE_STRUCT_IP_STATS_IPS_TOTAL))
++#elif defined(HAVE_SYS_SYSCTL_H) && defined(IPCTL_STATS)
+     {
+         int mib[] = {CTL_NET, PF_INET, IPPROTO_IP, IPCTL_STATS};
+ #define MIB_LEN (sizeof(mib) / sizeof(mib[0]))
+         int ip_ttl, ip_forwarding;
+-#if defined(HAVE_STRUCT_IPSTAT_IPS_TOTAL)
+         struct ipstat ip_stat;
+-#elif defined(HAVE_STRUCT_IP_STATS_IPS_TOTAL)
+-        struct ip_stats ip_stat;
+-#endif
+         size_t needed;
+ 
+         needed = sizeof(ip_stat);
+diff --git a/include/config.h.in b/include/config.h.in
+index 983c732..31381f1 100644
+--- a/include/config.h.in
++++ b/include/config.h.in
+@@ -1308,9 +1308,6 @@
+ #undef X_DISPLAY_MISSING
+ 
+ /* Enable large inode numbers on Mac OS X 10.5.  */
+-#ifndef _DARWIN_USE_64_BIT_INODE
+-# define _DARWIN_USE_64_BIT_INODE 1
+-#endif
+ 
+ /* Number of bits in a file offset, on hosts where this is settable. */
+ #undef _FILE_OFFSET_BITS
+

@@ -1,0 +1,23 @@
+diff --git a/dlls/msxml3/msxml_private.h b/dlls/msxml3/msxml_private.h
+index 0e7971e..01e8051 100644
+--- a/dlls/msxml3/msxml_private.h
++++ b/dlls/msxml3/msxml_private.h
+@@ -169,7 +169,7 @@ extern void schemasInit(void);
+ extern void schemasCleanup(void);
+ 
+ #ifndef HAVE_XMLFIRSTELEMENTCHILD
+-    static inline xmlNodePtr xmlFirstElementChild(xmlNodePtr parent)
++    static inline xmlNodePtr wine_xmlFirstElementChild(xmlNodePtr parent)
+     {
+     xmlNodePtr child;
+     for (child = parent->children; child != NULL; child = child->next)
+@@ -177,7 +177,8 @@ extern void schemasCleanup(void);
+             break;
+ 
+     return child;
+-}
++    }
++#define xmlFirstElementChild wine_xmlFirstElementChild
+ #endif
+ 
+ /* constructors */
