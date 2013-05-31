@@ -1,28 +1,31 @@
---- wine-1.3.15/dlls/wined3d/palette.c.orig	2011-03-04 19:25:23.000000000 +0100
-+++ wine-1.3.15/dlls/wined3d/palette.c.orig	2011-03-06 18:35:11.000000000 +0100
-@@ -41,12 +41,25 @@ 
- 
- ULONG CDECL wined3d_palette_decref(struct wined3d_palette *palette)
- {
-+    struct wined3d_resource *resource;
-+
-     ULONG refcount = InterlockedDecrement(&palette->ref);
- 
-     TRACE("%p decreasing refcount to %u.\n", palette, refcount);
- 
-     if (!refcount)
-     {
-+        /* If the palette is still attached to a render target, remove it from the render target */
-+        LIST_FOR_EACH_ENTRY(resource, &palette->device->resources, struct wined3d_resource, resource_list_entry)
-+        {
-+            if (resource->type == WINED3D_RTYPE_SURFACE)
-+            {
-+                struct wined3d_surface *surface = surface_from_resource(resource);
-+                if (surface->palette == palette)
-+	            surface->palette = NULL;
-+            }
-+        }
-+
-         DeleteObject(palette->hpal);
-         HeapFree(GetProcessHeap(), 0, palette);
-     }
+diff -crB wine-1.4.1_/dlls/wined3d/palette.c wine-1.4.1/dlls/wined3d/palette.c
+*** wine-1.4.1_/dlls/wined3d/palette.c	2012-06-15 21:17:00.000000000 +0200
+--- wine-1.4.1/dlls/wined3d/palette.c	2013-05-31 11:58:49.837860663 +0200
+***************
+*** 41,52 ****
+--- 41,65 ----
+  
+  ULONG CDECL wined3d_palette_decref(struct wined3d_palette *palette)
+  {
++     struct wined3d_resource *resource;
++ 
+      ULONG refcount = InterlockedDecrement(&palette->ref);
+  
+      TRACE("%p decreasing refcount to %u.\n", palette, refcount);
+  
+      if (!refcount)
+      {
++         /* If the palette is still attached to a render target, remove it from the render target */
++         LIST_FOR_EACH_ENTRY(resource, &palette->device->resources, struct wined3d_resource, resource_list_entry)
++         {
++             if (resource->type == WINED3D_RTYPE_SURFACE)
++             {
++                 struct wined3d_surface *surface = surface_from_resource(resource);
++                 if (surface->palette == palette)
++ 	            surface->palette = NULL;
++             }
++         }
++ 
+          DeleteObject(palette->hpal);
+          HeapFree(GetProcessHeap(), 0, palette);
+      }
