@@ -1,5 +1,7 @@
---- a/dlls/crypt32/cert.c	
-+++ a/dlls/crypt32/cert.c	
+diff --git a/dlls/crypt32/cert.c b/dlls/crypt32/cert.c
+index 63107e1..5a47a84 100644
+--- a/dlls/crypt32/cert.c
++++ b/dlls/crypt32/cert.c
 @@ -179,12 +179,19 @@ end:
  PCCERT_CONTEXT WINAPI CertDuplicateCertificateContext(
   PCCERT_CONTEXT pCertContext)
@@ -74,8 +76,10 @@
          ret = Context_Release((void *)pCertContext, sizeof(CERT_CONTEXT),
           CertDataContext_Free);
      return ret;
---- a/dlls/crypt32/collectionstore.c	
-+++ a/dlls/crypt32/collectionstore.c	
+diff --git a/dlls/crypt32/collectionstore.c b/dlls/crypt32/collectionstore.c
+index 6fe380c..a9adefc 100644
+--- a/dlls/crypt32/collectionstore.c
++++ b/dlls/crypt32/collectionstore.c
 @@ -145,7 +145,9 @@ static void *CRYPT_CollectionAdvanceEnum(PWINE_COLLECTIONSTORE store,
      if (pPrev)
      {
@@ -105,8 +109,10 @@
          TRACE("sibling %p's ref count is %d\n", sibling, sibling->ref);
          entry->store = sibling;
          entry->dwUpdateFlags = dwUpdateFlags;
---- a/dlls/crypt32/context.c	
-+++ a/dlls/crypt32/context.c	
+diff --git a/dlls/crypt32/context.c b/dlls/crypt32/context.c
+index bf4ccf3..f40b9a5 100644
+--- a/dlls/crypt32/context.c
++++ b/dlls/crypt32/context.c
 @@ -107,36 +107,6 @@ void Context_AddRef(void *context, size_t contextSize)
  
      InterlockedIncrement(&baseContext->ref);
@@ -205,8 +211,10 @@
  void Context_CopyProperties(const void *to, const void *from,
   size_t contextSize)
  {
---- a/dlls/crypt32/crypt32_private.h	
-+++ a/dlls/crypt32/crypt32_private.h	
+diff --git a/dlls/crypt32/crypt32_private.h b/dlls/crypt32/crypt32_private.h
+index ea85cbc..99952d3 100644
+--- a/dlls/crypt32/crypt32_private.h
++++ b/dlls/crypt32/crypt32_private.h
 @@ -365,14 +365,21 @@ void Context_AddRef(void *context, size_t contextSize) DECLSPEC_HIDDEN;
  
  typedef void (*ContextFreeFunc)(void *context);
@@ -231,8 +239,10 @@
  /**
   *  Context property list functions
   */
---- a/dlls/crypt32/store.c	
-+++ a/dlls/crypt32/store.c	
+diff --git a/dlls/crypt32/store.c b/dlls/crypt32/store.c
+index b540e61..a880dfd 100644
+--- a/dlls/crypt32/store.c
++++ b/dlls/crypt32/store.c
 @@ -1205,20 +1205,37 @@ PCCRL_CONTEXT WINAPI CertEnumCRLsInStore(HCERTSTORE hCertStore,
      return ret;
  }
@@ -297,8 +307,10 @@
          hcs->closeStore(hcs, dwFlags);
      }
      else
---- a/dlls/secur32/schannel_gnutls.c	
-+++ a/dlls/secur32/schannel_gnutls.c	
+diff --git a/dlls/secur32/schannel_gnutls.c b/dlls/secur32/schannel_gnutls.c
+index 96fb471..740bc20 100644
+--- a/dlls/secur32/schannel_gnutls.c
++++ b/dlls/secur32/schannel_gnutls.c
 @@ -322,9 +322,15 @@ SECURITY_STATUS schan_imp_get_session_peer_certificate(schan_imp_session session
      gnutls_session_t s = (gnutls_session_t)session;
      unsigned int list_size;
