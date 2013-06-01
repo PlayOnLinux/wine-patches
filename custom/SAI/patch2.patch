@@ -1,0 +1,31 @@
+@@ -, +, @@ 
+ correctly
+---
+ dlls/wintab32/context.c |    9 ++++++++-
+ 1 files changed, 8 insertions(+), 1 deletions(-)
+--- a/dlls/wintab32/context.c	
++++ a/dlls/wintab32/context.c	
+@@ -156,7 +156,7 @@ static inline BOOL LoadTablet(void)
+ 
+     if (loaded == TI_START)
+     {
+-        TRACE("Initializing the tablet to hwnd %p\n",hwndDefault);
++        TRACE("Initializing the tablet to hwndDefault %p\n",hwndDefault);
+ 
+         if (pLoadTabletInfo && pLoadTabletInfo(hwndDefault))
+         {
+@@ -416,6 +416,13 @@ static UINT WTInfoT(UINT wCategory, UINT nIndex, LPVOID lpOutput, BOOL bUnicode)
+                 buf.lcSysExtY = GetSystemMetrics(SM_CYSCREEN);
+             }
+ 
++            /* Workaround for applications that don't set lcOutExtX and lcOutExtY correctly */
++            if (wCategory == WTI_DDCTXS && nIndex == 0)
++            {
++                buf.lcOutExtY = GetSystemMetrics(SM_CYSCREEN);
++                buf.lcOutExtX = GetSystemMetrics(SM_CXSCREEN);
++            }
++
+             if (bUnicode)
+                 memcpy(lpOutput, &buf, sizeof(buf));
+             else
+-- 

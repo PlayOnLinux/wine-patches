@@ -1,0 +1,98 @@
+@@ -, +, @@ 
+ negative orAltitude packets
+---
+ dlls/winex11.drv/wintab.c |   39 +++++++++++++++++++++++++++++++++++----
+ 1 files changed, 35 insertions(+), 4 deletions(-)
+--- a/dlls/winex11.drv/wintab.c	
++++ a/dlls/winex11.drv/wintab.c	
+@@ -265,6 +265,7 @@ static int           proximity_in_type;
+ static int           proximity_out_type;
+ 
+ static HWND          hwndTabletDefault;
++static HWND          gActiveOwner = NULL;
+ static WTPACKET      gMsgPacket;
+ static DWORD         gSerial;
+ 
+@@ -860,7 +861,7 @@ static void motion_event( HWND hwnd, XEvent *event )
+ 
+     memset(&gMsgPacket,0,sizeof(WTPACKET));
+ 
+-    TRACE("Received tablet motion event (%p); device id %d, cursor num %d\n",hwnd, (int) motion->deviceid, curnum);
++    TRACE("Received tablet motion event (%p); device id %d, cursor num %d, pos %d %d\n",hwnd, (int) motion->deviceid, curnum, motion->axis_data[0], motion->axis_data[1]);
+ 
+     /* Set cursor to inverted if cursor is the eraser */
+     gMsgPacket.pkStatus = (cursor->TYPE  == CSR_TYPE_ERASER ? TPS_INVERT:0);
+@@ -875,8 +876,15 @@ static void motion_event( HWND hwnd, XEvent *event )
+                                              abs(motion->axis_data[4])))
+                                            * (gMsgPacket.pkStatus & TPS_INVERT?-1:1));
+     gMsgPacket.pkNormalPressure = motion->axis_data[2];
++
++    if (gMsgPacket.pkOrientation.orAltitude < 0)
++    {
++        FIXME("negative orAltitude\n");
++        return;
++    }
++
+     gMsgPacket.pkButtons = get_button_state(curnum);
+-    SendMessageW(hwndTabletDefault,WT_PACKET,gMsgPacket.pkSerialNumber,(LPARAM)hwnd);
++    SendMessageW(hwndTabletDefault,WT_PACKET,gMsgPacket.pkSerialNumber,(gActiveOwner == NULL ? (LPARAM)hwnd : (LPARAM)gActiveOwner));
+ }
+ 
+ static void button_event( HWND hwnd, XEvent *event )
+@@ -904,8 +912,15 @@ static void button_event( HWND hwnd, XEvent *event )
+                                                             abs(button->axis_data[4])))
+                                            * (gMsgPacket.pkStatus & TPS_INVERT?-1:1));
+     gMsgPacket.pkNormalPressure = button->axis_data[2];
++
++    if (gMsgPacket.pkOrientation.orAltitude < 0)
++    {
++        FIXME("negative orAltitude\n");
++        return;
++    }
++
+     gMsgPacket.pkButtons = get_button_state(curnum);
+-    SendMessageW(hwndTabletDefault,WT_PACKET,gMsgPacket.pkSerialNumber,(LPARAM)hwnd);
++    SendMessageW(hwndTabletDefault,WT_PACKET,gMsgPacket.pkSerialNumber,(gActiveOwner == NULL ? (LPARAM)hwnd : (LPARAM)gActiveOwner));
+ }
+ 
+ static void key_event( HWND hwnd, XEvent *event )
+@@ -943,6 +958,13 @@ static void proximity_event( HWND hwnd, XEvent *event )
+                                                             abs(proximity->axis_data[4])))
+                                            * (gMsgPacket.pkStatus & TPS_INVERT?-1:1));
+     gMsgPacket.pkNormalPressure = proximity->axis_data[2];
++
++    if (gMsgPacket.pkOrientation.orAltitude < 0)
++    {
++        FIXME("negative orAltitude\n");
++        return;
++    }
++
+     gMsgPacket.pkButtons = get_button_state(curnum);
+ 
+     /* FIXME: LPARAM loword is true when cursor entering context, false when leaving context
+@@ -954,7 +976,7 @@ static void proximity_event( HWND hwnd, XEvent *event )
+      */
+     proximity_info = MAKELPARAM((event->type == proximity_in_type),
+                      (event->type == proximity_in_type) || (event->type == proximity_out_type));
+-    SendMessageW(hwndTabletDefault, WT_PROXIMITY, (WPARAM)hwnd, proximity_info);
++    SendMessageW(hwndTabletDefault, WT_PROXIMITY, (gActiveOwner == NULL ? (WPARAM)hwnd : (WPARAM)gActiveOwner), proximity_info);
+ }
+ 
+ /***********************************************************************
+@@ -972,6 +994,15 @@ int CDECL X11DRV_AttachEventQueueToTablet(HWND hOwner)
+     XEventClass     event_list[7];
+     Window          win = X11DRV_get_whole_window( hOwner );
+ 
++    if (!win)
++    {
++        /* Workaround for hWnd with no Window */
++        if ((win = X11DRV_get_whole_window(GetAncestor(hOwner, GA_PARENT)))) { }
++        else if ((win = X11DRV_get_whole_window(GetAncestor(hOwner, GA_ROOTOWNER)))) { }
++        else if ((win = X11DRV_get_whole_window(GetAncestor(hOwner, GA_ROOT)))) { }
++        gActiveOwner = hOwner;
++    }
++
+     if (!win || !xinput_handle) return 0;
+ 
+     TRACE("Creating context for window %p (%lx)  %i cursors\n", hOwner, win, gNumCursors);
+-- 
