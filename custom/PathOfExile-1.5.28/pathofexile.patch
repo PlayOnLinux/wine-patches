@@ -1,0 +1,209 @@
+commit f5abeb8471df40819679982b03177acd7d82b763
+Author: Maarten Lankhorst <m.b.lankhorst@gmail.com>
+Date:   Wed Dec 19 10:30:04 2012 +0100
+
+    dsound: Use a thread instead of a timer for greater precision.
+
+diff --git a/dlls/dsound/dsound.c b/dlls/dsound/dsound.c
+index ac85ba2..381d0e1 100644
+--- b/dlls/dsound/dsound.c
++++ a/dlls/dsound/dsound.c
+@@ -670,13 +670,14 @@
+     TRACE("(%p) ref was %u\n", device, ref + 1);
+     if (!ref) {
+         int i;
++        timeKillEvent(device->timerID);
++        timeEndPeriod(DS_TIME_RES);
+ 
+-        SetEvent(device->sleepev);
+-        if (device->thread) {
+-            WaitForSingleObject(device->thread, INFINITE);
+-            CloseHandle(device->thread);
+-        }
+-        CloseHandle(device->sleepev);
++        /* The kill event should have allowed the timer process to expire
++         * but try to grab the lock just in case. Can't hold lock because
++         * secondarybuffer_destroy also grabs the lock */
++        RtlAcquireResourceShared(&(device->buffer_list_lock), TRUE);
++        RtlReleaseResource(&(device->buffer_list_lock));
+ 
+         EnterCriticalSection(&DSOUND_renderers_lock);
+         list_remove(&device->entry);
+@@ -812,7 +813,6 @@
+ 
+     device->mmdevice = mmdevice;
+     device->guid = devGUID;
+-    device->sleepev = CreateEventW(0, 0, 0, 0);
+ 
+     hr = DSOUND_ReopenDevice(device, FALSE);
+     if (FAILED(hr))
+@@ -869,10 +869,9 @@
+     ZeroMemory(&device->volpan, sizeof(device->volpan));
+ 
+     hr = DSOUND_PrimaryCreate(device);
+-    if (hr == DS_OK) {
+-        device->thread = CreateThread(0, 0, DSOUND_mixthread, device, 0, 0);
+-        SetThreadPriority(device->thread, THREAD_PRIORITY_TIME_CRITICAL);
+-    } else
++    if (hr == DS_OK)
++        device->timerID = DSOUND_create_timer(DSOUND_timer, (DWORD_PTR)device);
++    else
+         WARN("DSOUND_PrimaryCreate failed: %08x\n", hr);
+ 
+     *ppDevice = device;
+diff --git a/dlls/dsound/dsound_private.h b/dlls/dsound/dsound_private.h
+index 62656a5..1a3900c 100644
+--- b/dlls/dsound/dsound_private.h
++++ a/dlls/dsound/dsound_private.h
+@@ -68,9 +68,9 @@
+ 
+     GUID                        guid;
+     DSCAPS                      drvcaps;
+-    DWORD                       priolevel, sleeptime;
++    DWORD                       priolevel;
+     PWAVEFORMATEX               pwfx, primary_pwfx;
+-    UINT                        playing_offs_bytes, in_mmdev_bytes, prebuf;
++    UINT                        timerID, playing_offs_bytes, in_mmdev_bytes, prebuf;
+     DWORD                       fraglen;
+     LPBYTE                      buffer;
+     DWORD                       writelead, buflen, state, playpos, mixpos;
+@@ -97,7 +97,6 @@
+     IAudioStreamVolume *volume;
+     IAudioRenderClient *render;
+ 
+-    HANDLE sleepev, thread;
+     struct list entry;
+ };
+ 
+@@ -227,7 +226,7 @@
+ void DSOUND_RecalcFormat(IDirectSoundBufferImpl *dsb) DECLSPEC_HIDDEN;
+ DWORD DSOUND_secpos_to_bufpos(const IDirectSoundBufferImpl *dsb, DWORD secpos, DWORD secmixpos, float *overshot) DECLSPEC_HIDDEN;
+ 
+-DWORD CALLBACK DSOUND_mixthread(void *ptr) DECLSPEC_HIDDEN;
++void CALLBACK DSOUND_timer(UINT timerID, UINT msg, DWORD_PTR dwUser, DWORD_PTR dw1, DWORD_PTR dw2) DECLSPEC_HIDDEN;
+ 
+ /* sound3d.c */
+ 
+diff --git a/dlls/dsound/mixer.c b/dlls/dsound/mixer.c
+index 84e029b..282808e 100644
+--- b/dlls/dsound/mixer.c
++++ a/dlls/dsound/mixer.c
+@@ -820,7 +820,7 @@
+ 			DSOUND_PrimaryStop(device);
+ 		}
+ 
+-	} else if (device->state != STATE_STOPPED) {
++	} else {
+ 
+ 		DSOUND_WaveQueue(device, TRUE);
+ 
+@@ -843,29 +843,22 @@
+ 	/* **** */
+ }
+ 
+-DWORD CALLBACK DSOUND_mixthread(void *p)
++void CALLBACK DSOUND_timer(UINT timerID, UINT msg, DWORD_PTR dwUser,
++                           DWORD_PTR dw1, DWORD_PTR dw2)
+ {
+-	DirectSoundDevice *dev = p;
+-	TRACE("(%p)\n", dev);
++	DirectSoundDevice * device = (DirectSoundDevice*)dwUser;
++	DWORD start_time =  GetTickCount();
++	DWORD end_time;
++	TRACE("(%d,%d,0x%lx,0x%lx,0x%lx)\n",timerID,msg,dwUser,dw1,dw2);
++	TRACE("entering at %d\n", start_time);
++
++	RtlAcquireResourceShared(&(device->buffer_list_lock), TRUE);
++
++	if (device->ref)
++		DSOUND_PerformMix(device);
+ 
+-	while (dev->ref) {
+-		DWORD ret;
++	RtlReleaseResource(&(device->buffer_list_lock));
+ 
+-		/*
+-		 * Some audio drivers are retarded and won't fire after being
+-		 * stopped, add a timeout to handle this.
+-		 */
+-		ret = WaitForSingleObject(dev->sleepev, dev->sleeptime);
+-		if (ret == WAIT_FAILED)
+-			WARN("wait returned error %u %08x!\n", GetLastError(), GetLastError());
+-		else if (ret != WAIT_OBJECT_0)
+-			WARN("wait returned %08x!\n", ret);
+-		if (!dev->ref)
+-			break;
+-
+-		RtlAcquireResourceShared(&(dev->buffer_list_lock), TRUE);
+-		DSOUND_PerformMix(dev);
+-		RtlReleaseResource(&(dev->buffer_list_lock));
+-	}
+-	return 0;
++	end_time = GetTickCount();
++	TRACE("completed processing at %d, duration = %d\n", end_time, end_time - start_time);
+ }
+diff --git a/dlls/dsound/primary.c b/dlls/dsound/primary.c
+index 3ac928b..dd810fd 100644
+--- b/dlls/dsound/primary.c
++++ a/dlls/dsound/primary.c
+@@ -152,8 +152,6 @@
+     REFERENCE_TIME prebuf_rt;
+     WAVEFORMATEX *wfx = NULL;
+     HRESULT hres;
+-    REFERENCE_TIME period;
+-    DWORD period_ms;
+ 
+     TRACE("(%p, %d)\n", device, forcewave);
+ 
+@@ -194,15 +192,14 @@
+     prebuf_rt = (10000000 * (UINT64)prebuf_frames) / device->pwfx->nSamplesPerSec;
+ 
+     hres = IAudioClient_Initialize(device->client,
+-            AUDCLNT_SHAREMODE_SHARED, AUDCLNT_STREAMFLAGS_NOPERSIST |
+-            AUDCLNT_STREAMFLAGS_EVENTCALLBACK, prebuf_rt, 0, device->pwfx, NULL);
++            AUDCLNT_SHAREMODE_SHARED, AUDCLNT_STREAMFLAGS_NOPERSIST,
++            prebuf_rt, 0, device->pwfx, NULL);
+     if(FAILED(hres)){
+         IAudioClient_Release(device->client);
+         device->client = NULL;
+         WARN("Initialize failed: %08x\n", hres);
+         return hres;
+     }
+-    IAudioClient_SetEventHandle(device->client, device->sleepev);
+ 
+     hres = IAudioClient_GetService(device->client, &IID_IAudioRenderClient,
+             (void**)&device->render);
+@@ -237,24 +234,6 @@
+         return hres;
+     }
+ 
+-    /* Now kick off the timer so the event fires periodically */
+-    hres = IAudioClient_Start(device->client);
+-    if (FAILED(hres))
+-        WARN("starting failed with %08x\n", hres);
+-
+-    hres = IAudioClient_GetStreamLatency(device->client, &period);
+-    if (FAILED(hres)) {
+-        WARN("GetStreamLatency failed with %08x\n", hres);
+-        period_ms = 10;
+-    } else
+-        period_ms = (period + 9999) / 10000;
+-    TRACE("period %u ms fraglen %u prebuf %u\n", period_ms, device->fraglen, device->prebuf);
+-
+-    if (period_ms < 3)
+-        device->sleeptime = 5;
+-    else
+-        device->sleeptime = period_ms * 5 / 2;
+-
+     return S_OK;
+ }
+ 
+@@ -400,7 +379,7 @@
+     TRACE("(%p)\n", device);
+ 
+     hr = IAudioClient_Start(device->client);
+-    if(FAILED(hr) && hr != AUDCLNT_E_NOT_STOPPED){
++    if(FAILED(hr)){
+         WARN("Start failed: %08x\n", hr);
+         return hr;
+     }
