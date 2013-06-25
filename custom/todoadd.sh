@@ -36,6 +36,16 @@ then
 	echo "Missing winebuild.cfg, not adding to list."
 fi
 
+if [ ! -f "$folder/Info.md" ] ;
+then
+	echo "WARNING: No Info.md, these is not mandatory but this provide help for managing patches."
+	echo "WARNING: The file should contain references from the POL issue/feature DB."
+	echo "WARNING: The file should contain references from WineHQ website."
+	echo "WARNING: Patches url sources, or any thing interesting about this build."
+	echo "If you want to add it, please press ^C within 30 secondes, or wait if you really want made life harder for POL Team."
+	sleep 30s
+fi
+
 list=$(cd "$folder" && ls -1 *.patch | wc -l)
 if [ $list -lt 1 ] ; then
 	echo "There is not patch!"
