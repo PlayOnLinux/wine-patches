@@ -1,0 +1,147 @@
+diff -Nuar wine-1.5.28/dlls/kernel32/Makefile.in wine-1.5.28-tr/dlls/kernel32/Makefile.in
+--- wine-1.5.28/dlls/kernel32/Makefile.in	2013-04-12 20:35:09.000000000 +0200
++++ wine-1.5.28-tr/dlls/kernel32/Makefile.in	2013-04-21 22:25:26.866667561 +0200
+@@ -5,6 +5,9 @@
+ EXTRALIBS = @COREFOUNDATIONLIB@ @LIBPOLL@
+ EXTRADLLFLAGS = -nodefaultlibs -Wb,-F,KERNEL32.dll -Wl,--image-base,0x7b800000
+ 
++sync2.o:
++	$(CC) -c -g -O0 $(INCLUDES) $(DEFS) $(DLLFLAGS) $(EXTRACFLAGS) $(MODCFLAGS) -o $@ $<
++
+ C_SRCS = \
+ 	actctx.c \
+ 	atom.c \
+@@ -35,6 +38,7 @@
+ 	resource.c \
+ 	string.c \
+ 	sync.c \
++	sync2.c \
+ 	tape.c \
+ 	term.c \
+ 	thread.c \
+diff -Nuar wine-1.5.28/dlls/kernel32/sync2.c wine-1.5.28-tr/dlls/kernel32/sync2.c
+--- wine-1.5.28/dlls/kernel32/sync2.c	1970-01-01 01:00:00.000000000 +0100
++++ wine-1.5.28-tr/dlls/kernel32/sync2.c	2013-04-21 22:12:03.926659658 +0200
+@@ -0,0 +1,57 @@
++/*
++ * Kernel synchronization objects
++ *
++ * Copyright 1998 Alexandre Julliard
++ *
++ * This library is free software; you can redistribute it and/or
++ * modify it under the terms of the GNU Lesser General Public
++ * License as published by the Free Software Foundation; either
++ * version 2.1 of the License, or (at your option) any later version.
++ *
++ * This library is distributed in the hope that it will be useful,
++ * but WITHOUT ANY WARRANTY; without even the implied warranty of
++ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the GNU
++ * Lesser General Public License for more details.
++ *
++ * You should have received a copy of the GNU Lesser General Public
++ * License along with this library; if not, write to the Free Software
++ * Foundation, Inc., 51 Franklin St, Fifth Floor, Boston, MA 02110-1301, USA
++ */
++
++#include "config.h"
++#include "wine/port.h"
++
++#include <string.h>
++#ifdef HAVE_UNISTD_H
++# include <unistd.h>
++#endif
++#include <errno.h>
++#include <stdarg.h>
++#include <stdio.h>
++
++#define NONAMELESSUNION
++#define NONAMELESSSTRUCT
++
++#include "ntstatus.h"
++#define WIN32_NO_STATUS
++#include "windef.h"
++#include "winbase.h"
++#include "winerror.h"
++#include "winnls.h"
++#include "winternl.h"
++#include "winioctl.h"
++#include "ddk/wdm.h"
++
++#include "wine/unicode.h"
++#include "kernel_private.h"
++
++#include "wine/debug.h"
++
++/***********************************************************************
++ *           CreateSemaphoreW   (KERNEL32.@)
++ */
++HANDLE WINAPI DECLSPEC_HOTPATCH CreateSemaphoreW( SECURITY_ATTRIBUTES *sa, LONG initial, LONG max, LPCWSTR name )
++{
++    return CreateSemaphoreExW( sa, initial, max, name, 0, SEMAPHORE_ALL_ACCESS );
++}
++
+diff -Nuar wine-1.5.28/dlls/kernel32/sync.c wine-1.5.28-tr/dlls/kernel32/sync.c
+--- wine-1.5.28/dlls/kernel32/sync.c	2013-04-12 20:35:09.000000000 +0200
++++ wine-1.5.28-tr/dlls/kernel32/sync.c	2013-04-21 22:11:32.126659345 +0200
+@@ -744,15 +744,6 @@
+ 
+ 
+ /***********************************************************************
+- *           CreateSemaphoreW   (KERNEL32.@)
+- */
+-HANDLE WINAPI DECLSPEC_HOTPATCH CreateSemaphoreW( SECURITY_ATTRIBUTES *sa, LONG initial, LONG max, LPCWSTR name )
+-{
+-    return CreateSemaphoreExW( sa, initial, max, name, 0, SEMAPHORE_ALL_ACCESS );
+-}
+-
+-
+-/***********************************************************************
+  *           CreateSemaphoreExA   (KERNEL32.@)
+  */
+ HANDLE WINAPI DECLSPEC_HOTPATCH CreateSemaphoreExA( SECURITY_ATTRIBUTES *sa, LONG initial, LONG max,
+diff -Nuar wine-1.5.28/dlls/user32/input.c wine-1.5.28-tr/dlls/user32/input.c
+--- wine-1.5.28/dlls/user32/input.c	2013-04-12 20:35:09.000000000 +0200
++++ wine-1.5.28-tr/dlls/user32/input.c	2013-04-21 21:27:55.282633590 +0200
+@@ -288,25 +288,7 @@
+  */
+ BOOL WINAPI DECLSPEC_HOTPATCH SetCursorPos( INT x, INT y )
+ {
+-    BOOL ret;
+-    INT prev_x, prev_y, new_x, new_y;
+-
+-    SERVER_START_REQ( set_cursor )
+-    {
+-        req->flags = SET_CURSOR_POS;
+-        req->x     = x;
+-        req->y     = y;
+-        if ((ret = !wine_server_call( req )))
+-        {
+-            prev_x = reply->prev_x;
+-            prev_y = reply->prev_y;
+-            new_x  = reply->new_x;
+-            new_y  = reply->new_y;
+-        }
+-    }
+-    SERVER_END_REQ;
+-    if (ret && (prev_x != new_x || prev_y != new_y)) USER_Driver->pSetCursorPos( new_x, new_y );
+-    return ret;
++    return TRUE;
+ }
+ 
+ 
+diff -Nuar wine-1.5.28/dlls/winex11.drv/mouse.c wine-1.5.28-tr/dlls/winex11.drv/mouse.c
+--- wine-1.5.28/dlls/winex11.drv/mouse.c	2013-04-12 20:35:09.000000000 +0200
++++ wine-1.5.28-tr/dlls/winex11.drv/mouse.c	2013-04-21 21:29:20.150634425 +0200
+@@ -1376,7 +1376,11 @@
+  */
+ BOOL CDECL X11DRV_ClipCursor( LPCRECT clip )
+ {
+-    if (!clip) clip = &virtual_screen_rect;
++    if (!clip)
++    {
++        ungrab_clipping_window();
++        return TRUE;
++    }
+ 
+     if (GetWindowThreadProcessId( GetDesktopWindow(), NULL ) == GetCurrentThreadId())
+         return TRUE;  /* don't clip in the desktop process */
