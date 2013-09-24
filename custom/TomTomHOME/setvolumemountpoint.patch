@@ -1,0 +1,238 @@
+From: Johannes Obermayr <johannesobermayr@gmx.de>
+Subject: [PATCH] kernel32: Basic integration of SetVolumeMountPointA/W. (v3)
+Message-Id: <1353601436-2896-1-git-send-email-johannesobermayr@gmx.de>
+Date: Thu, 22 Nov 2012 17:23:56 +0100
+
+Fixes: Bug 31951 and its duplicate 31703 (crash in TomTom HOME software)
+
+Fixes not: Bug 7711 (detecting TomTom devices)
+
+Maybe the device detection works if wine's MountManager supports MOUNTMGR_CREATE_POINT_INPUT:
+- fixme:mountmgr:mountmgr_ioctl ioctl 6dc000 not supported
+- http://doxygen.reactos.org/d9/df4/drivers_2filters_2mountmgr_2device_8c_source.html#l01479
+
+v2:
+    Add a wine_PWSTR_IS_VOLUME_NAME(s) macro to get rid of a UNICODE_STRING.
+v3:
+    Remove some strange looking memset calls and casts and copy volume name via memcpy.
+---
+ dlls/kernel32/kernel32.spec |    4 +-
+ dlls/kernel32/volume.c      |  154 +++++++++++++++++++++++++++++++++++++++++++
+ include/ddk/mountmgr.h      |    9 +++
+ include/winbase.h           |    2 +-
+ 4 Dateien geändert, 166 Zeilen hinzugefügt(+), 3 Zeilen entfernt(-)
+
+diff --git a/dlls/kernel32/kernel32.spec b/dlls/kernel32/kernel32.spec
+index 0bd1adc..9b16dfe 100644
+--- a/dlls/kernel32/kernel32.spec
++++ b/dlls/kernel32/kernel32.spec
+@@ -1179,8 +1179,8 @@
+ @ stub SetVDMCurrentDirectories
+ @ stdcall SetVolumeLabelA(str str)
+ @ stdcall SetVolumeLabelW(wstr wstr)
+-@ stub SetVolumeMountPointA
+-@ stub SetVolumeMountPointW
++@ stdcall SetVolumeMountPointA(str str)
++@ stdcall SetVolumeMountPointW(wstr wstr)
+ @ stdcall SetWaitableTimer(long ptr long ptr ptr long)
+ @ stdcall SetupComm(long long long)
+ @ stub ShowConsoleCursor
+diff --git a/dlls/kernel32/volume.c b/dlls/kernel32/volume.c
+index 200c293..77d61a8 100644
+--- a/dlls/kernel32/volume.c
++++ b/dlls/kernel32/volume.c
+@@ -1098,6 +1098,160 @@ err_ret:
+ }
+ 
+ /***********************************************************************
++ *           SetVolumeMountPointW   (KERNEL32.@)
++ */
++BOOL WINAPI SetVolumeMountPointW(LPCWSTR path, LPCWSTR volume)
++{
++    const WCHAR prefixW[] = {'\\','D','o','s','D','e','v','i','c','e','s','\\'};
++    LPWSTR namesW = NULL;
++    DWORD buffer = MAX_PATH;
++    HANDLE mgr;
++    BOOL ret = FALSE;
++
++    /* This struct is a better integration of MOUNTMGR_CREATE_POINT_INPUT   */
++    /* Maybe DeviceName[14] must become adapted for mounted folders support */
++    struct
++    {
++        USHORT DeviceNameOffset;
++        USHORT DeviceNameLength;
++        USHORT VolumeNameOffset;
++        USHORT VolumeNameLength;
++        WCHAR  DeviceName[14];   /* 14 WCHARs: prefixW + 2 */
++        WCHAR  VolumeName[48];   /* without trailing '\'   */
++    } input;
++
++    TRACE("(%s, %s)\n", debugstr_w(path), debugstr_w(volume));
++
++    /* Clear input */
++    memset(&input, 0, sizeof(input));
++
++    /* Now prefill with always needed consts */
++    input.DeviceNameOffset = (int)&input.DeviceName - (int)&input;
++    input.DeviceNameLength = (int)&input.VolumeName - (int)&input.DeviceName;
++    input.VolumeNameOffset = input.DeviceNameOffset + input.DeviceNameLength;
++    input.VolumeNameLength = sizeof(input.VolumeName);
++
++    /* Begin with initial checks */
++    if (!path || !volume)
++    {
++        SetLastError(ERROR_INVALID_PARAMETER);
++        goto free_input;
++    }
++
++    /* Abort if path has been mounted */
++    if (GetVolumeNameForVolumeMountPointW(path, namesW, MAX_PATH))
++    {
++        WARN("%s already mounts %s\n", debugstr_w(path), debugstr_w(namesW));
++        SetLastError(ERROR_DIR_NOT_EMPTY);
++        goto free_input;
++    }
++
++    /* We can use checks and error codes from GetVolumeNameForVolumeMountPointW */
++    switch (GetLastError())
++    {
++        case ERROR_INVALID_NAME:
++        case ERROR_FILENAME_EXCED_RANGE:
++            goto free_input;
++        default:
++            break;
++    }
++
++    /* Check whether volume name is valid */
++    if (!wine_PWSTR_IS_VOLUME_NAME(volume))
++    {
++        WARN("(%s, %s), invalid volume name!\n", debugstr_w(path), debugstr_w(volume));
++        SetLastError(ERROR_INVALID_NAME);
++        goto free_input;
++    }
++
++    /* Abort if volume has been mounted */
++    if (GetVolumePathNamesForVolumeNameW(volume, namesW, buffer, &buffer))
++    {
++        WARN("%s is already mounted by %s\n", debugstr_w(volume), debugstr_w(namesW));
++        SetLastError(ERROR_VOLUME_MOUNTED);
++        goto free_input;
++    }
++
++    if(strlenW(path) == 3 && path[1] == ':')
++    {
++        /* Fill input with SymlinkName */
++        memcpy(input.DeviceName, prefixW, sizeof(prefixW));
++        input.DeviceName[12] = toupper(path[0]);  /* Drive letter */
++        input.DeviceName[13] = ':';
++
++        /* Now fill the VolumeName and make sure the 2nd WCHAR is '?' */
++        memcpy(input.VolumeName, volume, sizeof(input.VolumeName));
++        input.VolumeName[1] = '?';
++
++        /* Create the handle */
++        mgr = CreateFileW(MOUNTMGR_DOS_DEVICE_NAME,
++                          GENERIC_READ | GENERIC_WRITE,
++                          FILE_SHARE_READ | FILE_SHARE_WRITE,
++                          0,
++                          OPEN_EXISTING,
++                          FILE_ATTRIBUTE_NORMAL,
++                          NULL);
++
++        if (mgr == INVALID_HANDLE_VALUE)
++        {
++            WARN("Handle could not be created\n");
++            goto free_input;
++        }
++
++        /* MountManager should now be able to create the VolumeMountPoint */
++        ret = DeviceIoControl(mgr, IOCTL_MOUNTMGR_CREATE_POINT, &input, sizeof(input), 0, 0, 0, 0);
++
++        CloseHandle(mgr);
++
++        goto free_input;
++    }
++
++    FIXME("Mounting folders are not yet supported\n");
++
++free_input:
++    HeapFree(GetProcessHeap(), 0, &input);
++
++    return ret;
++}
++
++/************************************************************************
++ *           SetVolumeMountPointA   (KERNEL32.@)
++ */
++BOOL WINAPI SetVolumeMountPointA(LPCSTR path, LPCSTR volume)
++{
++    BOOL ret = FALSE;
++    WCHAR *pathW, *volumeW;
++
++    TRACE("(%s, %s)\n", debugstr_a(path), debugstr_a(volume));
++
++    if (!path || !volume)
++    {
++        SetLastError(ERROR_INVALID_PARAMETER);
++        return FALSE;
++    }
++
++    if (!(pathW = FILE_name_AtoW(path, TRUE)))
++    {
++        SetLastError(ERROR_NOT_ENOUGH_MEMORY);
++        return FALSE;
++    }
++
++    if (!(volumeW = FILE_name_AtoW(volume, TRUE)))
++    {
++        SetLastError(ERROR_NOT_ENOUGH_MEMORY);
++        goto free_pathW;
++    }
++
++    ret = SetVolumeMountPointW(pathW, volumeW);
++
++    HeapFree(GetProcessHeap(), 0, volumeW);
++free_pathW:
++    HeapFree(GetProcessHeap(), 0, pathW);
++
++    return ret;
++}
++
++/***********************************************************************
+  *           DefineDosDeviceW       (KERNEL32.@)
+  */
+ BOOL WINAPI DefineDosDeviceW( DWORD flags, LPCWSTR devname, LPCWSTR targetpath )
+diff --git a/include/ddk/mountmgr.h b/include/ddk/mountmgr.h
+index f0e836f..bc4e87f 100644
+--- a/include/ddk/mountmgr.h
++++ b/include/ddk/mountmgr.h
+@@ -139,4 +139,13 @@ typedef struct _MOUNTMGR_TARGET_NAME
+      (s)->Buffer[19] == '-' && (s)->Buffer[24] == '-' && (s)->Buffer[29] == '-'  && \
+      (s)->Buffer[34] == '-' && (s)->Buffer[47] == '}')
+ 
++#define wine_PWSTR_IS_VOLUME_NAME(s) \
++    ((strlenW(s) == 48 || (strlenW(s) == 49 && (s)[48] == '\\')) && \
++     (s)[0] == '\\' && ((s)[1] == '?' || (s)[1] == '\\') && \
++     (s)[2] == '?'  && (s)[3] == '\\' && (s)[4] == 'V'   && \
++     (s)[5] == 'o'  && (s)[6] == 'l'  && (s)[7] == 'u'   && \
++     (s)[8] == 'm'  && (s)[9] == 'e'  && (s)[10] == '{'  && \
++     (s)[19] == '-' && (s)[24] == '-' && (s)[29] == '-'  && \
++     (s)[34] == '-' && (s)[47] == '}')
++
+ #endif /* _MOUNTMGR_ */
+diff --git a/include/winbase.h b/include/winbase.h
+index a9abb30..936497e 100644
+--- a/include/winbase.h
++++ b/include/winbase.h
+@@ -2229,7 +2229,7 @@ WINBASEAPI BOOL        WINAPI SetVolumeLabelA(LPCSTR,LPCSTR);
+ WINBASEAPI BOOL        WINAPI SetVolumeLabelW(LPCWSTR,LPCWSTR);
+ #define                       SetVolumeLabel WINELIB_NAME_AW(SetVolumeLabel)
+ WINBASEAPI BOOL        WINAPI SetVolumeMountPointA(LPCSTR,LPCSTR);
+-WINBASEAPI BOOL        WINAPI SetVolumeMountPointW(LPCSTR,LPCSTR);
++WINBASEAPI BOOL        WINAPI SetVolumeMountPointW(LPCWSTR,LPCWSTR);
+ #define                       SetVolumeMountPoint WINELIB_NAME_AW(SetVolumeMountPoint)
+ WINBASEAPI BOOL        WINAPI SetWaitableTimer(HANDLE,const LARGE_INTEGER*,LONG,PTIMERAPCROUTINE,LPVOID,BOOL);
+ WINBASEAPI BOOL        WINAPI SetupComm(HANDLE,DWORD,DWORD);
+-- 
+1.7.10.4
+
