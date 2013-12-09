@@ -1,0 +1,50 @@
+diff --git a/configure b/configure
+index 81a474f..7eedb3f 100755
+--- a/configure
++++ b/configure
+@@ -7293,9 +7293,8 @@ clean::
+     LIBEXT="dylib"
+     DLLFLAGS="$DLLFLAGS -fPIC"
+     LIBWINE_LDFLAGS="-multiply_defined suppress"
+-    LDRPATH_INSTALL="-Wl,-rpath,@loader_path/\`\$(MAKEDEP) -R \$(bindir) \$(libdir)\`"
+-    LDRPATH_LOCAL="-Wl,-rpath,@loader_path/\$(top_builddir)/libs/wine"
+-        COREFOUNDATIONLIB="-framework CoreFoundation"
++	LDRPATH_LOCAL="&& install_name_tool -change @executable_path/\`\$(RELPATH) \$(bindir) \$(libdir)\`/libwine.1.dylib @executable_path/\$(top_builddir)/libs/wine/libwine.1.dylib \$@ || \$(RM) \$@"
++	    COREFOUNDATIONLIB="-framework CoreFoundation"
+ 
+     IOKITLIB="-framework IOKit -framework CoreFoundation"
+ 
+@@ -7464,7 +7463,7 @@ fi
+ all: libwine.dylib
+ 
+ libwine.\$(VERSION).dylib: \$(OBJS)
+-	\$(CC) -dynamiclib -install_name @rpath/libwine.\$(SOVERSION).dylib -Wl,-rpath,@loader_path/ -compatibility_version \$(SOVERSION) -current_version \$(VERSION) \$(OBJS) \$(EXTRALIBS) \$(LDFLAGS) \$(LIBS) -o \$@
++	\$(CC) -dynamiclib -install_name @rpath/libwine.\$(SOVERSION).dylib -compatibility_version \$(SOVERSION) -current_version \$(VERSION) \$(OBJS) \$(EXTRALIBS) \$(LDFLAGS) \$(LIBS) -o \$@
+ 
+ libwine.\$(SOVERSION).dylib: libwine.\$(VERSION).dylib
+ 	\$(RM) \$@ && \$(LN_S) libwine.\$(VERSION).dylib \$@
+diff --git a/configure.ac b/configure.ac
+index 0124652..2ae7217 100644
+--- a/configure.ac
++++ b/configure.ac
+@@ -746,9 +746,8 @@ clean::
+     LIBEXT="dylib"
+     DLLFLAGS="$DLLFLAGS -fPIC"
+     LIBWINE_LDFLAGS="-multiply_defined suppress"
+-    LDRPATH_INSTALL="-Wl,-rpath,@loader_path/\`\$(MAKEDEP) -R \$(bindir) \$(libdir)\`"
+-    LDRPATH_LOCAL="-Wl,-rpath,@loader_path/\$(top_builddir)/libs/wine"
+-    dnl declare needed frameworks
++	DRPATH_LOCAL="&& install_name_tool -change @executable_path/\`\$(RELPATH) \$(bindir) \$(libdir)\`/libwine.1.dylib @executable_path/\$(top_builddir)/libs/wine/libwine.1.dylib \$@ || \$(RM) \$@"    
++	+dnl declare needed frameworks
+     AC_SUBST(COREFOUNDATIONLIB,"-framework CoreFoundation")
+     AC_SUBST(IOKITLIB,"-framework IOKit -framework CoreFoundation")
+     AC_SUBST(FORCEFEEDBACKLIB,"-framework ForceFeedback -framework CoreFoundation")
+@@ -850,7 +849,7 @@ clean::
+ all: libwine.dylib
+ 
+ libwine.\$(VERSION).dylib: \$(OBJS)
+-	\$(CC) -dynamiclib -install_name @rpath/libwine.\$(SOVERSION).dylib -Wl,-rpath,@loader_path/ -compatibility_version \$(SOVERSION) -current_version \$(VERSION) \$(OBJS) \$(EXTRALIBS) \$(LDFLAGS) \$(LIBS) -o \$@
++	\$(CC) -dynamiclib -install_name @rpath/libwine.\$(SOVERSION).dylib -compatibility_version \$(SOVERSION) -current_version \$(VERSION) \$(OBJS) \$(EXTRALIBS) \$(LDFLAGS) \$(LIBS) -o \$@
+ 
+ libwine.\$(SOVERSION).dylib: libwine.\$(VERSION).dylib
+ 	\$(RM) \$@ && \$(LN_S) libwine.\$(VERSION).dylib \$@
