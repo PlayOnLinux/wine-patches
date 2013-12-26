@@ -1,0 +1,4124 @@
+diff -Naur a/dlls/crypt32/cert.c b/dlls/crypt32/cert.c
+--- a/dlls/crypt32/cert.c	2013-10-11 17:21:06.000000000 +0000
++++ b/dlls/crypt32/cert.c	2013-10-25 17:45:30.000000000 +0000
+@@ -38,7 +38,7 @@
+  * CertGetCertificateContextProperty, and are particular to the store in which
+  * the property exists (which is separate from the context.)
+  */
+-static BOOL CertContext_GetProperty(void *context, DWORD dwPropId,
++static BOOL CertContext_GetProperty(cert_t *cert, DWORD dwPropId,
+  void *pvData, DWORD *pcbData);
+ 
+ /* Internal version of CertSetCertificateContextProperty that sets properties
+@@ -46,7 +46,7 @@
+  * type.) Doesn't handle special cases, since they're handled by
+  * CertSetCertificateContextProperty anyway.
+  */
+-static BOOL CertContext_SetProperty(void *context, DWORD dwPropId,
++static BOOL CertContext_SetProperty(cert_t *cert, DWORD dwPropId,
+  DWORD dwFlags, const void *pvData);
+ 
+ BOOL WINAPI CertAddEncodedCertificateToStore(HCERTSTORE hCertStore,
+@@ -109,6 +109,184 @@
+     return ret;
+ }
+ 
++static const context_vtbl_t cert_vtbl;
++
++static void Cert_free(context_t *context)
++{
++    cert_t *cert = (cert_t*)context;
++
++    CryptMemFree(cert->ctx.pbCertEncoded);
++    LocalFree(cert->ctx.pCertInfo);
++}
++
++static context_t *Cert_clone(context_t *context, WINECRYPT_CERTSTORE *store, BOOL use_link)
++{
++    cert_t *cert;
++
++    if(use_link) {
++        cert = (cert_t*)Context_CreateLinkContext(sizeof(CERT_CONTEXT), context, store);
++        if(!cert)
++            return NULL;
++    }else {
++        const cert_t *cloned = (const cert_t*)context;
++        DWORD size = 0;
++        BOOL res;
++
++        cert = (cert_t*)Context_CreateDataContext(sizeof(CERT_CONTEXT), &cert_vtbl, store);
++        if(!cert)
++            return NULL;
++
++        Context_CopyProperties(&cert->ctx, &cloned->ctx);
++
++        cert->ctx.dwCertEncodingType = cloned->ctx.dwCertEncodingType;
++        cert->ctx.pbCertEncoded = CryptMemAlloc(cloned->ctx.cbCertEncoded);
++        memcpy(cert->ctx.pbCertEncoded, cloned->ctx.pbCertEncoded, cloned->ctx.cbCertEncoded);
++        cert->ctx.cbCertEncoded = cloned->ctx.cbCertEncoded;
++
++        /* FIXME: We don't need to decode the object here, we could just clone cert info. */
++        res = CryptDecodeObjectEx(cert->ctx.dwCertEncodingType, X509_CERT_TO_BE_SIGNED,
++         cert->ctx.pbCertEncoded, cert->ctx.cbCertEncoded, CRYPT_DECODE_ALLOC_FLAG, NULL,
++         &cert->ctx.pCertInfo, &size);
++        if(!res) {
++            CertFreeCertificateContext(&cert->ctx);
++            return NULL;
++        }
++    }
++
++    cert->ctx.hCertStore = store;
++    return &cert->base;
++}
++
++static const context_vtbl_t cert_vtbl = {
++    Cert_free,
++    Cert_clone
++};
++
++static BOOL WINAPI add_cert_to_store(WINECRYPT_CERTSTORE *store, const CERT_CONTEXT *cert,
++ DWORD add_disposition, BOOL use_link, PCCERT_CONTEXT *ret_context)
++{
++    const CERT_CONTEXT *existing = NULL;
++    BOOL ret = TRUE, inherit_props = FALSE;
++    context_t *new_context = NULL;
++
++    switch (add_disposition)
++    {
++    case CERT_STORE_ADD_ALWAYS:
++        break;
++    case CERT_STORE_ADD_NEW:
++    case CERT_STORE_ADD_REPLACE_EXISTING:
++    case CERT_STORE_ADD_REPLACE_EXISTING_INHERIT_PROPERTIES:
++    case CERT_STORE_ADD_USE_EXISTING:
++    case CERT_STORE_ADD_NEWER:
++    case CERT_STORE_ADD_NEWER_INHERIT_PROPERTIES:
++    {
++        BYTE hashToAdd[20];
++        DWORD size = sizeof(hashToAdd);
++
++        ret = CertGetCertificateContextProperty(cert, CERT_HASH_PROP_ID,
++         hashToAdd, &size);
++        if (ret)
++        {
++            CRYPT_HASH_BLOB blob = { sizeof(hashToAdd), hashToAdd };
++
++            existing = CertFindCertificateInStore(store, cert->dwCertEncodingType, 0,
++             CERT_FIND_SHA1_HASH, &blob, NULL);
++        }
++        break;
++    }
++    default:
++        FIXME("Unimplemented add disposition %d\n", add_disposition);
++        SetLastError(E_INVALIDARG);
++        return FALSE;
++    }
++
++    switch (add_disposition)
++    {
++    case CERT_STORE_ADD_ALWAYS:
++        break;
++    case CERT_STORE_ADD_NEW:
++        if (existing)
++        {
++            TRACE("found matching certificate, not adding\n");
++            SetLastError(CRYPT_E_EXISTS);
++            return FALSE;
++        }
++        break;
++    case CERT_STORE_ADD_REPLACE_EXISTING:
++        break;
++    case CERT_STORE_ADD_REPLACE_EXISTING_INHERIT_PROPERTIES:
++        if (use_link)
++            FIXME("CERT_STORE_ADD_REPLACE_EXISTING_INHERIT_PROPERTIES: semi-stub for links\n");
++        if (existing)
++            inherit_props = TRUE;
++        break;
++    case CERT_STORE_ADD_USE_EXISTING:
++        if(use_link)
++            FIXME("CERT_STORE_ADD_USE_EXISTING: semi-stub for links\n");
++        if (existing)
++        {
++            Context_CopyProperties(existing, cert);
++            if (ret_context)
++                *ret_context = CertDuplicateCertificateContext(existing);
++            return TRUE;
++        }
++        break;
++    case CERT_STORE_ADD_NEWER:
++        if (existing && CompareFileTime(&existing->pCertInfo->NotBefore, &cert->pCertInfo->NotBefore) >= 0)
++        {
++            TRACE("existing certificate is newer, not adding\n");
++            SetLastError(CRYPT_E_EXISTS);
++            return FALSE;
++        }
++        break;
++    case CERT_STORE_ADD_NEWER_INHERIT_PROPERTIES:
++        if (existing)
++        {
++            if (CompareFileTime(&existing->pCertInfo->NotBefore, &cert->pCertInfo->NotBefore) >= 0)
++            {
++                TRACE("existing certificate is newer, not adding\n");
++                SetLastError(CRYPT_E_EXISTS);
++                return FALSE;
++            }
++            inherit_props = TRUE;
++        }
++        break;
++    }
++
++    /* FIXME: We have tests that this works, but what should we really do in this case? */
++    if(!store) {
++        if(ret_context)
++            *ret_context = CertDuplicateCertificateContext(cert);
++        return TRUE;
++    }
++
++    ret = store->vtbl->certs.addContext(store, context_from_ptr(cert), existing ? context_from_ptr(existing) : NULL,
++     (ret_context || inherit_props) ? &new_context : NULL, use_link);
++    if(!ret)
++        return FALSE;
++
++    if(inherit_props)
++        Context_CopyProperties(context_ptr(new_context), existing);
++
++    if(ret_context)
++        *ret_context = context_ptr(new_context);
++    else if(new_context)
++        Context_Release(new_context);
++
++    TRACE("returning %d\n", ret);
++    return ret;
++}
++
++BOOL WINAPI CertAddCertificateContextToStore(HCERTSTORE hCertStore, PCCERT_CONTEXT pCertContext,
++ DWORD dwAddDisposition, PCCERT_CONTEXT *ppStoreContext)
++{
++    WINECRYPT_CERTSTORE *store = hCertStore;
++
++    TRACE("(%p, %p, %08x, %p)\n", hCertStore, pCertContext, dwAddDisposition, ppStoreContext);
++
++    return add_cert_to_store(store, pCertContext, dwAddDisposition, FALSE, ppStoreContext);
++}
++
+ BOOL WINAPI CertAddCertificateLinkToStore(HCERTSTORE hCertStore,
+  PCCERT_CONTEXT pCertContext, DWORD dwAddDisposition,
+  PCCERT_CONTEXT *ppCertContext)
+@@ -126,14 +304,14 @@
+         SetLastError(E_INVALIDARG);
+         return FALSE;
+     }
+-    return CertAddCertificateContextToStore(hCertStore, pCertContext,
+-     dwAddDisposition, ppCertContext);
++    return add_cert_to_store(hCertStore, pCertContext, dwAddDisposition, TRUE, ppCertContext);
+ }
+ 
+ PCCERT_CONTEXT WINAPI CertCreateCertificateContext(DWORD dwCertEncodingType,
+  const BYTE *pbCertEncoded, DWORD cbCertEncoded)
+ {
+-    PCERT_CONTEXT cert = NULL;
++    cert_t *cert = NULL;
++    BYTE *data = NULL;
+     BOOL ret;
+     PCERT_INFO certInfo = NULL;
+     DWORD size = 0;
+@@ -150,79 +328,65 @@
+     ret = CryptDecodeObjectEx(dwCertEncodingType, X509_CERT_TO_BE_SIGNED,
+      pbCertEncoded, cbCertEncoded, CRYPT_DECODE_ALLOC_FLAG, NULL,
+      &certInfo, &size);
+-    if (ret)
+-    {
+-        BYTE *data = NULL;
++    if (!ret)
++        return NULL;
+ 
+-        cert = Context_CreateDataContext(sizeof(CERT_CONTEXT));
+-        if (!cert)
+-            goto end;
+-        data = CryptMemAlloc(cbCertEncoded);
+-        if (!data)
+-        {
+-            CertFreeCertificateContext(cert);
+-            cert = NULL;
+-            goto end;
+-        }
+-        memcpy(data, pbCertEncoded, cbCertEncoded);
+-        cert->dwCertEncodingType = dwCertEncodingType;
+-        cert->pbCertEncoded      = data;
+-        cert->cbCertEncoded      = cbCertEncoded;
+-        cert->pCertInfo          = certInfo;
+-        cert->hCertStore         = 0;
++    cert = (cert_t*)Context_CreateDataContext(sizeof(CERT_CONTEXT), &cert_vtbl, &empty_store);
++    if (!cert)
++        return NULL;
++    data = CryptMemAlloc(cbCertEncoded);
++    if (!data)
++    {
++        Context_Release(&cert->base);
++        return NULL;
+     }
+ 
+-end:
+-    return cert;
++    memcpy(data, pbCertEncoded, cbCertEncoded);
++    cert->ctx.dwCertEncodingType = dwCertEncodingType;
++    cert->ctx.pbCertEncoded      = data;
++    cert->ctx.cbCertEncoded      = cbCertEncoded;
++    cert->ctx.pCertInfo          = certInfo;
++    cert->ctx.hCertStore         = &empty_store;
++
++    return &cert->ctx;
+ }
+ 
+-PCCERT_CONTEXT WINAPI CertDuplicateCertificateContext(
+- PCCERT_CONTEXT pCertContext)
++PCCERT_CONTEXT WINAPI CertDuplicateCertificateContext(PCCERT_CONTEXT pCertContext)
+ {
+     TRACE("(%p)\n", pCertContext);
+ 
+     if (!pCertContext)
+         return NULL;
+ 
+-    Context_AddRef((void *)pCertContext);
++    Context_AddRef(&cert_from_ptr(pCertContext)->base);
+     return pCertContext;
+ }
+ 
+-static void CertDataContext_Free(void *context)
+-{
+-    PCERT_CONTEXT certContext = context;
+-
+-    CryptMemFree(certContext->pbCertEncoded);
+-    LocalFree(certContext->pCertInfo);
+-}
+-
+ BOOL WINAPI CertFreeCertificateContext(PCCERT_CONTEXT pCertContext)
+ {
+-    BOOL ret = TRUE;
+-
+     TRACE("(%p)\n", pCertContext);
+ 
+     if (pCertContext)
+-        ret = Context_Release((void *)pCertContext, CertDataContext_Free);
+-    return ret;
++        Context_Release(&cert_from_ptr(pCertContext)->base);
++    return TRUE;
+ }
+ 
+ DWORD WINAPI CertEnumCertificateContextProperties(PCCERT_CONTEXT pCertContext,
+  DWORD dwPropId)
+ {
+-    CONTEXT_PROPERTY_LIST *properties = Context_GetProperties(pCertContext);
++    cert_t *cert = cert_from_ptr(pCertContext);
+     DWORD ret;
+ 
+     TRACE("(%p, %d)\n", pCertContext, dwPropId);
+ 
+-    if (properties)
+-        ret = ContextPropertyList_EnumPropIDs(properties, dwPropId);
++    if (cert->base.properties)
++        ret = ContextPropertyList_EnumPropIDs(cert->base.properties, dwPropId);
+     else
+         ret = 0;
+     return ret;
+ }
+ 
+-static BOOL CertContext_GetHashProp(void *context, DWORD dwPropId,
++static BOOL CertContext_GetHashProp(cert_t *cert, DWORD dwPropId,
+  ALG_ID algID, const BYTE *toHash, DWORD toHashLen, void *pvData,
+  DWORD *pcbData)
+ {
+@@ -232,7 +396,7 @@
+     {
+         CRYPT_DATA_BLOB blob = { *pcbData, pvData };
+ 
+-        ret = CertContext_SetProperty(context, dwPropId, 0, &blob);
++        ret = CertContext_SetProperty(cert, dwPropId, 0, &blob);
+     }
+     return ret;
+ }
+@@ -258,18 +422,16 @@
+     return ret;
+ }
+ 
+-static BOOL CertContext_GetProperty(void *context, DWORD dwPropId,
++static BOOL CertContext_GetProperty(cert_t *cert, DWORD dwPropId,
+  void *pvData, DWORD *pcbData)
+ {
+-    PCCERT_CONTEXT pCertContext = context;
+-    CONTEXT_PROPERTY_LIST *properties = Context_GetProperties(context);
+     BOOL ret;
+     CRYPT_DATA_BLOB blob;
+ 
+-    TRACE("(%p, %d, %p, %p)\n", context, dwPropId, pvData, pcbData);
++    TRACE("(%p, %d, %p, %p)\n", cert, dwPropId, pvData, pcbData);
+ 
+-    if (properties)
+-        ret = ContextPropertyList_FindProperty(properties, dwPropId, &blob);
++    if (cert->base.properties)
++        ret = ContextPropertyList_FindProperty(cert->base.properties, dwPropId, &blob);
+     else
+         ret = FALSE;
+     if (ret)
+@@ -280,49 +442,49 @@
+         switch (dwPropId)
+         {
+         case CERT_SHA1_HASH_PROP_ID:
+-            ret = CertContext_GetHashProp(context, dwPropId, CALG_SHA1,
+-             pCertContext->pbCertEncoded, pCertContext->cbCertEncoded, pvData,
++            ret = CertContext_GetHashProp(cert, dwPropId, CALG_SHA1,
++             cert->ctx.pbCertEncoded, cert->ctx.cbCertEncoded, pvData,
+              pcbData);
+             break;
+         case CERT_MD5_HASH_PROP_ID:
+-            ret = CertContext_GetHashProp(context, dwPropId, CALG_MD5,
+-             pCertContext->pbCertEncoded, pCertContext->cbCertEncoded, pvData,
++            ret = CertContext_GetHashProp(cert, dwPropId, CALG_MD5,
++             cert->ctx.pbCertEncoded, cert->ctx.cbCertEncoded, pvData,
+              pcbData);
+             break;
+         case CERT_SUBJECT_NAME_MD5_HASH_PROP_ID:
+-            ret = CertContext_GetHashProp(context, dwPropId, CALG_MD5,
+-             pCertContext->pCertInfo->Subject.pbData,
+-             pCertContext->pCertInfo->Subject.cbData,
++            ret = CertContext_GetHashProp(cert, dwPropId, CALG_MD5,
++             cert->ctx.pCertInfo->Subject.pbData,
++             cert->ctx.pCertInfo->Subject.cbData,
+              pvData, pcbData);
+             break;
+         case CERT_SUBJECT_PUBLIC_KEY_MD5_HASH_PROP_ID:
+-            ret = CertContext_GetHashProp(context, dwPropId, CALG_MD5,
+-             pCertContext->pCertInfo->SubjectPublicKeyInfo.PublicKey.pbData,
+-             pCertContext->pCertInfo->SubjectPublicKeyInfo.PublicKey.cbData,
++            ret = CertContext_GetHashProp(cert, dwPropId, CALG_MD5,
++             cert->ctx.pCertInfo->SubjectPublicKeyInfo.PublicKey.pbData,
++             cert->ctx.pCertInfo->SubjectPublicKeyInfo.PublicKey.cbData,
+              pvData, pcbData);
+             break;
+         case CERT_ISSUER_SERIAL_NUMBER_MD5_HASH_PROP_ID:
+-            ret = CertContext_GetHashProp(context, dwPropId, CALG_MD5,
+-             pCertContext->pCertInfo->SerialNumber.pbData,
+-             pCertContext->pCertInfo->SerialNumber.cbData,
++            ret = CertContext_GetHashProp(cert, dwPropId, CALG_MD5,
++             cert->ctx.pCertInfo->SerialNumber.pbData,
++             cert->ctx.pCertInfo->SerialNumber.cbData,
+              pvData, pcbData);
+             break;
+         case CERT_SIGNATURE_HASH_PROP_ID:
+-            ret = CryptHashToBeSigned(0, pCertContext->dwCertEncodingType,
+-             pCertContext->pbCertEncoded, pCertContext->cbCertEncoded, pvData,
++            ret = CryptHashToBeSigned(0, cert->ctx.dwCertEncodingType,
++             cert->ctx.pbCertEncoded, cert->ctx.cbCertEncoded, pvData,
+              pcbData);
+             if (ret && pvData)
+             {
+                 CRYPT_DATA_BLOB blob = { *pcbData, pvData };
+ 
+-                ret = CertContext_SetProperty(context, dwPropId, 0, &blob);
++                ret = CertContext_SetProperty(cert, dwPropId, 0, &blob);
+             }
+             break;
+         case CERT_KEY_IDENTIFIER_PROP_ID:
+         {
+             PCERT_EXTENSION ext = CertFindExtension(
+-             szOID_SUBJECT_KEY_IDENTIFIER, pCertContext->pCertInfo->cExtension,
+-             pCertContext->pCertInfo->rgExtension);
++             szOID_SUBJECT_KEY_IDENTIFIER, cert->ctx.pCertInfo->cExtension,
++             cert->ctx.pCertInfo->rgExtension);
+ 
+             if (ext)
+             {
+@@ -337,7 +499,7 @@
+                 {
+                     ret = CertContext_CopyParam(pvData, pcbData, value.pbData,
+                      value.cbData);
+-                    CertContext_SetProperty(context, dwPropId, 0, &value);
++                    CertContext_SetProperty(cert, dwPropId, 0, &value);
+                 }
+             }
+             else
+@@ -378,6 +540,7 @@
+ BOOL WINAPI CertGetCertificateContextProperty(PCCERT_CONTEXT pCertContext,
+  DWORD dwPropId, void *pvData, DWORD *pcbData)
+ {
++    cert_t *cert = cert_from_ptr(pCertContext);
+     BOOL ret;
+ 
+     TRACE("(%p, %d, %p, %p)\n", pCertContext, dwPropId, pvData, pcbData);
+@@ -392,22 +555,14 @@
+         ret = FALSE;
+         break;
+     case CERT_ACCESS_STATE_PROP_ID:
+-        if (pCertContext->hCertStore)
+-            ret = CertGetStoreProperty(pCertContext->hCertStore, dwPropId,
+-             pvData, pcbData);
+-        else
+-        {
+-            DWORD state = 0;
+-
+-            ret = CertContext_CopyParam(pvData, pcbData, &state, sizeof(state));
+-        }
++        ret = CertGetStoreProperty(cert->ctx.hCertStore, dwPropId, pvData, pcbData);
+         break;
+     case CERT_KEY_PROV_HANDLE_PROP_ID:
+     {
+         CERT_KEY_CONTEXT keyContext;
+         DWORD size = sizeof(keyContext);
+ 
+-        ret = CertContext_GetProperty((void *)pCertContext,
++        ret = CertContext_GetProperty(cert,
+          CERT_KEY_CONTEXT_PROP_ID, &keyContext, &size);
+         if (ret)
+             ret = CertContext_CopyParam(pvData, pcbData, &keyContext.hCryptProv,
+@@ -415,13 +570,13 @@
+         break;
+     }
+     case CERT_KEY_PROV_INFO_PROP_ID:
+-        ret = CertContext_GetProperty((void *)pCertContext, dwPropId, pvData,
++        ret = CertContext_GetProperty(cert, dwPropId, pvData,
+          pcbData);
+         if (ret && pvData)
+             CRYPT_FixKeyProvInfoPointers(pvData);
+         break;
+     default:
+-        ret = CertContext_GetProperty((void *)pCertContext, dwPropId, pvData,
++        ret = CertContext_GetProperty(cert, dwPropId, pvData,
+          pcbData);
+     }
+ 
+@@ -509,15 +664,14 @@
+     return ret;
+ }
+ 
+-static BOOL CertContext_SetProperty(void *context, DWORD dwPropId,
++static BOOL CertContext_SetProperty(cert_t *cert, DWORD dwPropId,
+  DWORD dwFlags, const void *pvData)
+ {
+-    CONTEXT_PROPERTY_LIST *properties = Context_GetProperties(context);
+     BOOL ret;
+ 
+-    TRACE("(%p, %d, %08x, %p)\n", context, dwPropId, dwFlags, pvData);
++    TRACE("(%p, %d, %08x, %p)\n", cert, dwPropId, dwFlags, pvData);
+ 
+-    if (!properties)
++    if (!cert->base.properties)
+         ret = FALSE;
+     else
+     {
+@@ -546,23 +700,23 @@
+             {
+                 const CRYPT_DATA_BLOB *blob = pvData;
+ 
+-                ret = ContextPropertyList_SetProperty(properties, dwPropId,
++                ret = ContextPropertyList_SetProperty(cert->base.properties, dwPropId,
+                  blob->pbData, blob->cbData);
+             }
+             else
+             {
+-                ContextPropertyList_RemoveProperty(properties, dwPropId);
++                ContextPropertyList_RemoveProperty(cert->base.properties, dwPropId);
+                 ret = TRUE;
+             }
+             break;
+         }
+         case CERT_DATE_STAMP_PROP_ID:
+             if (pvData)
+-                ret = ContextPropertyList_SetProperty(properties, dwPropId,
++                ret = ContextPropertyList_SetProperty(cert->base.properties, dwPropId,
+                  pvData, sizeof(FILETIME));
+             else
+             {
+-                ContextPropertyList_RemoveProperty(properties, dwPropId);
++                ContextPropertyList_RemoveProperty(cert->base.properties, dwPropId);
+                 ret = TRUE;
+             }
+             break;
+@@ -578,22 +732,22 @@
+                     ret = FALSE;
+                 }
+                 else
+-                    ret = ContextPropertyList_SetProperty(properties, dwPropId,
++                    ret = ContextPropertyList_SetProperty(cert->base.properties, dwPropId,
+                      (const BYTE *)keyContext, keyContext->cbSize);
+             }
+             else
+             {
+-                ContextPropertyList_RemoveProperty(properties, dwPropId);
++                ContextPropertyList_RemoveProperty(cert->base.properties, dwPropId);
+                 ret = TRUE;
+             }
+             break;
+         }
+         case CERT_KEY_PROV_INFO_PROP_ID:
+             if (pvData)
+-                ret = CertContext_SetKeyProvInfoProperty(properties, pvData);
++                ret = CertContext_SetKeyProvInfoProperty(cert->base.properties, pvData);
+             else
+             {
+-                ContextPropertyList_RemoveProperty(properties, dwPropId);
++                ContextPropertyList_RemoveProperty(cert->base.properties, dwPropId);
+                 ret = TRUE;
+             }
+             break;
+@@ -602,7 +756,7 @@
+             CERT_KEY_CONTEXT keyContext;
+             DWORD size = sizeof(keyContext);
+ 
+-            ret = CertContext_GetProperty(context, CERT_KEY_CONTEXT_PROP_ID,
++            ret = CertContext_GetProperty(cert, CERT_KEY_CONTEXT_PROP_ID,
+              &keyContext, &size);
+             if (ret)
+             {
+@@ -617,7 +771,7 @@
+                 keyContext.hCryptProv = 0;
+                 keyContext.dwKeySpec = AT_SIGNATURE;
+             }
+-            ret = CertContext_SetProperty(context, CERT_KEY_CONTEXT_PROP_ID,
++            ret = CertContext_SetProperty(cert, CERT_KEY_CONTEXT_PROP_ID,
+              0, &keyContext);
+             break;
+         }
+@@ -650,7 +804,7 @@
+         SetLastError(E_INVALIDARG);
+         return FALSE;
+     }
+-    ret = CertContext_SetProperty((void *)pCertContext, dwPropId, dwFlags,
++    ret = CertContext_SetProperty(cert_from_ptr(pCertContext), dwPropId, dwFlags,
+      pvData);
+     TRACE("returning %d\n", ret);
+     return ret;
+diff -Naur a/dlls/crypt32/collectionstore.c b/dlls/crypt32/collectionstore.c
+--- a/dlls/crypt32/collectionstore.c	2013-10-11 17:21:06.000000000 +0000
++++ b/dlls/crypt32/collectionstore.c	2013-10-25 17:45:30.000000000 +0000
+@@ -20,7 +20,6 @@
+ #include "winbase.h"
+ #include "wincrypt.h"
+ #include "wine/debug.h"
+-#include "wine/list.h"
+ #include "crypt32_private.h"
+ 
+ WINE_DEFAULT_DEBUG_CHANNEL(crypt);
+@@ -40,79 +39,93 @@
+     struct list         stores;
+ } WINE_COLLECTIONSTORE;
+ 
+-static void Collection_closeStore(WINECRYPT_CERTSTORE *store, DWORD dwFlags)
++static void Collection_addref(WINECRYPT_CERTSTORE *store)
++{
++    LONG ref = InterlockedIncrement(&store->ref);
++    TRACE("ref = %d\n", ref);
++}
++
++static DWORD Collection_release(WINECRYPT_CERTSTORE *store, DWORD flags)
+ {
+     WINE_COLLECTIONSTORE *cs = (WINE_COLLECTIONSTORE*)store;
+     WINE_STORE_LIST_ENTRY *entry, *next;
++    LONG ref;
+ 
+-    TRACE("(%p, %08x)\n", store, dwFlags);
++    if(flags)
++        FIXME("Unimplemented flags %x\n", flags);
+ 
+-    LIST_FOR_EACH_ENTRY_SAFE(entry, next, &cs->stores, WINE_STORE_LIST_ENTRY,
+-     entry)
++    ref = InterlockedDecrement(&cs->hdr.ref);
++    TRACE("(%p) ref=%d\n", store, ref);
++    if(ref)
++        return ERROR_SUCCESS;
++
++    LIST_FOR_EACH_ENTRY_SAFE(entry, next, &cs->stores, WINE_STORE_LIST_ENTRY, entry)
+     {
+         TRACE("closing %p\n", entry);
+-        CertCloseStore(entry->store, dwFlags);
++        entry->store->vtbl->release(entry->store, flags);
+         CryptMemFree(entry);
+     }
+     cs->cs.DebugInfo->Spare[0] = 0;
+     DeleteCriticalSection(&cs->cs);
+     CRYPT_FreeStore(store);
++    return ERROR_SUCCESS;
++}
++
++static void Collection_releaseContext(WINECRYPT_CERTSTORE *store, context_t *context)
++{
++    /* We don't cache context links, so just free them. */
++    Context_Free(context);
+ }
+ 
+-static void *CRYPT_CollectionCreateContextFromChild(WINE_COLLECTIONSTORE *store,
+- WINE_STORE_LIST_ENTRY *storeEntry, void *child, size_t contextSize,
+- BOOL addRef)
+-{
+-    void *ret = Context_CreateLinkContext(contextSize, child,
+-     sizeof(WINE_STORE_LIST_ENTRY*), addRef);
+-
+-    if (ret)
+-        *(WINE_STORE_LIST_ENTRY **)Context_GetExtra(ret, contextSize)
+-         = storeEntry;
++static context_t *CRYPT_CollectionCreateContextFromChild(WINE_COLLECTIONSTORE *store,
++ WINE_STORE_LIST_ENTRY *storeEntry, context_t *child)
++{
++    context_t *ret;
++
++    ret = child->vtbl->clone(child, &store->hdr, TRUE);
++    if (!ret)
++        return NULL;
+ 
++    ret->u.ptr = storeEntry;
+     return ret;
+ }
+ 
+ static BOOL CRYPT_CollectionAddContext(WINE_COLLECTIONSTORE *store,
+- unsigned int contextFuncsOffset, void *context, void *toReplace, unsigned int contextSize,
+- void **pChildContext)
++ unsigned int contextFuncsOffset, context_t *context, context_t *toReplace,
++ context_t **pChildContext)
+ {
+     BOOL ret;
+-    void *childContext = NULL;
++    context_t *childContext = NULL;
+     WINE_STORE_LIST_ENTRY *storeEntry = NULL;
+ 
+-    TRACE("(%p, %d, %p, %p, %d)\n", store, contextFuncsOffset, context,
+-     toReplace, contextSize);
++    TRACE("(%p, %d, %p, %p)\n", store, contextFuncsOffset, context, toReplace);
+ 
+     ret = FALSE;
+     if (toReplace)
+     {
+-        void *existingLinked = Context_GetLinkedContext(toReplace);
++        context_t *existingLinked = toReplace->linked;
+         CONTEXT_FUNCS *contextFuncs;
+ 
+-        storeEntry = *(WINE_STORE_LIST_ENTRY **)Context_GetExtra(toReplace,
+-         contextSize);
+-        contextFuncs = (CONTEXT_FUNCS*)((LPBYTE)storeEntry->store +
++        storeEntry = toReplace->u.ptr;
++        contextFuncs = (CONTEXT_FUNCS*)((LPBYTE)storeEntry->store->vtbl +
+          contextFuncsOffset);
+         ret = contextFuncs->addContext(storeEntry->store, context,
+-         existingLinked, (const void **)&childContext);
++         existingLinked, &childContext, TRUE);
+     }
+     else
+     {
+         WINE_STORE_LIST_ENTRY *entry, *next;
+ 
+         EnterCriticalSection(&store->cs);
+-        LIST_FOR_EACH_ENTRY_SAFE(entry, next, &store->stores,
+-         WINE_STORE_LIST_ENTRY, entry)
++        LIST_FOR_EACH_ENTRY_SAFE(entry, next, &store->stores, WINE_STORE_LIST_ENTRY, entry)
+         {
+             if (entry->dwUpdateFlags & CERT_PHYSICAL_STORE_ADD_ENABLE_FLAG)
+             {
+                 CONTEXT_FUNCS *contextFuncs = (CONTEXT_FUNCS*)(
+-                 (LPBYTE)entry->store + contextFuncsOffset);
++                 (LPBYTE)entry->store->vtbl + contextFuncsOffset);
+ 
+                 storeEntry = entry;
+-                ret = contextFuncs->addContext(entry->store, context, NULL,
+-                 (const void **)&childContext);
++                ret = contextFuncs->addContext(entry->store, context, NULL, &childContext, TRUE);
+                 break;
+             }
+         }
+@@ -133,31 +146,34 @@
+  * Returns NULL if the collection contains no more items or on error.
+  * Assumes the collection store's lock is held.
+  */
+-static void *CRYPT_CollectionAdvanceEnum(WINE_COLLECTIONSTORE *store,
++static context_t *CRYPT_CollectionAdvanceEnum(WINE_COLLECTIONSTORE *store,
+  WINE_STORE_LIST_ENTRY *storeEntry, const CONTEXT_FUNCS *contextFuncs,
+- const WINE_CONTEXT_INTERFACE *contextInterface, void *pPrev, size_t contextSize)
++ context_t *prev)
+ {
+-    void *ret, *child;
++    context_t *child, *ret;
+     struct list *storeNext = list_next(&store->stores, &storeEntry->entry);
+ 
+-    TRACE("(%p, %p, %p)\n", store, storeEntry, pPrev);
++    TRACE("(%p, %p, %p)\n", store, storeEntry, prev);
+ 
+-    if (pPrev)
++    if (prev)
+     {
+         /* Ref-counting funny business: "duplicate" (addref) the child, because
+          * the free(pPrev) below can cause the ref count to become negative.
+          */
+-        child = Context_GetLinkedContext(pPrev);
+-        contextInterface->duplicate(child);
++        child = prev->linked;
++        Context_AddRef(child);
+         child = contextFuncs->enumContext(storeEntry->store, child);
+-        contextInterface->free(pPrev);
+-        pPrev = NULL;
++        Context_Release(prev);
++        prev = NULL;
+     }
+     else
++    {
+         child = contextFuncs->enumContext(storeEntry->store, NULL);
+-    if (child)
+-        ret = CRYPT_CollectionCreateContextFromChild(store, storeEntry, child,
+-         contextSize, FALSE);
++    }
++    if (child) {
++        ret = CRYPT_CollectionCreateContextFromChild(store, storeEntry, child);
++        Context_Release(child);
++    }
+     else
+     {
+         if (storeNext)
+@@ -165,14 +181,14 @@
+             /* We always want the same function pointers (from certs, crls)
+              * in the next store, so use the same offset into the next store.
+              */
+-            size_t offset = (const BYTE *)contextFuncs - (LPBYTE)storeEntry->store;
++            size_t offset = (const BYTE *)contextFuncs - (LPBYTE)storeEntry->store->vtbl;
+             WINE_STORE_LIST_ENTRY *storeNextEntry =
+              LIST_ENTRY(storeNext, WINE_STORE_LIST_ENTRY, entry);
+             CONTEXT_FUNCS *storeNextContexts =
+-             (CONTEXT_FUNCS*)((LPBYTE)storeNextEntry->store + offset);
++             (CONTEXT_FUNCS*)((LPBYTE)storeNextEntry->store->vtbl + offset);
+ 
+             ret = CRYPT_CollectionAdvanceEnum(store, storeNextEntry,
+-             storeNextContexts, contextInterface, NULL, contextSize);
++             storeNextContexts, NULL);
+         }
+         else
+         {
+@@ -184,48 +200,42 @@
+     return ret;
+ }
+ 
+-static BOOL CRYPT_CollectionAddCert(WINECRYPT_CERTSTORE *store, void *cert,
+- void *toReplace, const void **ppStoreContext)
++static BOOL Collection_addCert(WINECRYPT_CERTSTORE *store, context_t *cert,
++ context_t *toReplace, context_t **ppStoreContext, BOOL use_link)
+ {
+     BOOL ret;
+-    void *childContext = NULL;
++    context_t *childContext = NULL;
+     WINE_COLLECTIONSTORE *cs = (WINE_COLLECTIONSTORE*)store;
+ 
+-    ret = CRYPT_CollectionAddContext(cs, offsetof(WINECRYPT_CERTSTORE, certs),
+-     cert, toReplace, sizeof(CERT_CONTEXT), &childContext);
++    ret = CRYPT_CollectionAddContext(cs, offsetof(store_vtbl_t, certs),
++     cert, toReplace, &childContext);
+     if (ppStoreContext && childContext)
+     {
+-        WINE_STORE_LIST_ENTRY *storeEntry = *(WINE_STORE_LIST_ENTRY **)
+-         Context_GetExtra(childContext, sizeof(CERT_CONTEXT));
+-        PCERT_CONTEXT context =
+-         CRYPT_CollectionCreateContextFromChild(cs, storeEntry, childContext,
+-         sizeof(CERT_CONTEXT), TRUE);
+-
+-        if (context)
+-            context->hCertStore = store;
+-        *ppStoreContext = context;
++        WINE_STORE_LIST_ENTRY *storeEntry = childContext->u.ptr;
++        cert_t *context = (cert_t*)CRYPT_CollectionCreateContextFromChild(cs, storeEntry,
++         childContext);
++
++        *ppStoreContext = &context->base;
+     }
+-    CertFreeCertificateContext(childContext);
++    if (childContext)
++        Context_Release(childContext);
+     return ret;
+ }
+ 
+-static void *CRYPT_CollectionEnumCert(WINECRYPT_CERTSTORE *store, void *pPrev)
++static context_t *Collection_enumCert(WINECRYPT_CERTSTORE *store, context_t *prev)
+ {
+     WINE_COLLECTIONSTORE *cs = (WINE_COLLECTIONSTORE*)store;
+-    void *ret;
++    context_t *ret;
+ 
+-    TRACE("(%p, %p)\n", store, pPrev);
++    TRACE("(%p, %p)\n", store, prev);
+ 
+     EnterCriticalSection(&cs->cs);
+-    if (pPrev)
++    if (prev)
+     {
+-        WINE_STORE_LIST_ENTRY *storeEntry =
+-         *(WINE_STORE_LIST_ENTRY **)Context_GetExtra(pPrev,
+-         sizeof(CERT_CONTEXT));
++        WINE_STORE_LIST_ENTRY *storeEntry = prev->u.ptr;
+ 
+         ret = CRYPT_CollectionAdvanceEnum(cs, storeEntry,
+-         &storeEntry->store->certs, pCertInterface, pPrev,
+-         sizeof(CERT_CONTEXT));
++         &storeEntry->store->vtbl->certs, prev);
+     }
+     else
+     {
+@@ -235,8 +245,7 @@
+              WINE_STORE_LIST_ENTRY, entry);
+ 
+             ret = CRYPT_CollectionAdvanceEnum(cs, storeEntry,
+-             &storeEntry->store->certs, pCertInterface, NULL,
+-             sizeof(CERT_CONTEXT));
++             &storeEntry->store->vtbl->certs, NULL);
+         }
+         else
+         {
+@@ -245,73 +254,57 @@
+         }
+     }
+     LeaveCriticalSection(&cs->cs);
+-    if (ret)
+-        ((PCERT_CONTEXT)ret)->hCertStore = store;
+     TRACE("returning %p\n", ret);
+     return ret;
+ }
+ 
+-static BOOL CRYPT_CollectionDeleteCert(WINECRYPT_CERTSTORE *store,
+- void *pCertContext)
++static BOOL Collection_deleteCert(WINECRYPT_CERTSTORE *store, context_t *context)
+ {
+-    BOOL ret;
+-    PCCERT_CONTEXT linked;
++    cert_t *cert = (cert_t*)context;
++    cert_t *linked;
+ 
+-    TRACE("(%p, %p)\n", store, pCertContext);
++    TRACE("(%p, %p)\n", store, cert);
+ 
+-    /* Deleting the linked context results in its ref count getting
+-     * decreased, but the caller of this (CertDeleteCertificateFromStore) also
+-     * decreases pCertContext's ref count, by calling
+-     * CertFreeCertificateContext.  Increase ref count of linked context to
+-     * compensate.
+-     */
+-    linked = Context_GetLinkedContext(pCertContext);
+-    CertDuplicateCertificateContext(linked);
+-    ret = CertDeleteCertificateFromStore(linked);
+-    return ret;
++    linked = (cert_t*)context->linked;
++    return CertDeleteCertificateFromStore(&linked->ctx);
+ }
+ 
+-static BOOL CRYPT_CollectionAddCRL(WINECRYPT_CERTSTORE *store, void *crl,
+- void *toReplace, const void **ppStoreContext)
++static BOOL Collection_addCRL(WINECRYPT_CERTSTORE *store, context_t *crl,
++ context_t *toReplace, context_t **ppStoreContext, BOOL use_link)
+ {
+     BOOL ret;
+-    void *childContext = NULL;
++    context_t *childContext = NULL;
+     WINE_COLLECTIONSTORE *cs = (WINE_COLLECTIONSTORE*)store;
+ 
+-    ret = CRYPT_CollectionAddContext(cs, offsetof(WINECRYPT_CERTSTORE, crls),
+-     crl, toReplace, sizeof(CRL_CONTEXT), &childContext);
++    ret = CRYPT_CollectionAddContext(cs, offsetof(store_vtbl_t, crls),
++     crl, toReplace, &childContext);
+     if (ppStoreContext && childContext)
+     {
+-        WINE_STORE_LIST_ENTRY *storeEntry = *(WINE_STORE_LIST_ENTRY **)
+-         Context_GetExtra(childContext, sizeof(CRL_CONTEXT));
+-        PCRL_CONTEXT context =
+-         CRYPT_CollectionCreateContextFromChild(cs, storeEntry, childContext,
+-         sizeof(CRL_CONTEXT), TRUE);
+-
+-        if (context)
+-            context->hCertStore = store;
+-        *ppStoreContext = context;
++        WINE_STORE_LIST_ENTRY *storeEntry = childContext->u.ptr;
++        crl_t *context = (crl_t*)CRYPT_CollectionCreateContextFromChild(cs, storeEntry,
++         childContext);
++
++        *ppStoreContext = &context->base;
+     }
+-    CertFreeCRLContext(childContext);
++    if (childContext)
++        Context_Release(childContext);
+     return ret;
+ }
+ 
+-static void *CRYPT_CollectionEnumCRL(WINECRYPT_CERTSTORE *store, void *pPrev)
++static context_t *Collection_enumCRL(WINECRYPT_CERTSTORE *store, context_t *prev)
+ {
+     WINE_COLLECTIONSTORE *cs = (WINE_COLLECTIONSTORE*)store;
+-    void *ret;
++    context_t *ret;
+ 
+-    TRACE("(%p, %p)\n", store, pPrev);
++    TRACE("(%p, %p)\n", store, prev);
+ 
+     EnterCriticalSection(&cs->cs);
+-    if (pPrev)
++    if (prev)
+     {
+-        WINE_STORE_LIST_ENTRY *storeEntry =
+-         *(WINE_STORE_LIST_ENTRY **)Context_GetExtra(pPrev,
+-         sizeof(CRL_CONTEXT));
++        WINE_STORE_LIST_ENTRY *storeEntry = prev->u.ptr;
+ 
+         ret = CRYPT_CollectionAdvanceEnum(cs, storeEntry,
+-         &storeEntry->store->crls, pCRLInterface, pPrev, sizeof(CRL_CONTEXT));
++         &storeEntry->store->vtbl->crls, prev);
+     }
+     else
+     {
+@@ -321,8 +314,7 @@
+              WINE_STORE_LIST_ENTRY, entry);
+ 
+             ret = CRYPT_CollectionAdvanceEnum(cs, storeEntry,
+-             &storeEntry->store->crls, pCRLInterface, NULL,
+-             sizeof(CRL_CONTEXT));
++             &storeEntry->store->vtbl->crls, NULL);
+         }
+         else
+         {
+@@ -331,70 +323,56 @@
+         }
+     }
+     LeaveCriticalSection(&cs->cs);
+-    if (ret)
+-        ((PCRL_CONTEXT)ret)->hCertStore = store;
+     TRACE("returning %p\n", ret);
+     return ret;
+ }
+ 
+-static BOOL CRYPT_CollectionDeleteCRL(WINECRYPT_CERTSTORE *store, void *pCrlContext)
++static BOOL Collection_deleteCRL(WINECRYPT_CERTSTORE *store, context_t *context)
+ {
+-    BOOL ret;
+-    PCCRL_CONTEXT linked;
++    crl_t *crl = (crl_t*)context, *linked;
+ 
+-    TRACE("(%p, %p)\n", store, pCrlContext);
++    TRACE("(%p, %p)\n", store, crl);
+ 
+-    /* Deleting the linked context results in its ref count getting
+-     * decreased, but the caller of this (CertDeleteCRLFromStore) also
+-     * decreases pCrlContext's ref count, by calling CertFreeCRLContext.
+-     * Increase ref count of linked context to compensate.
+-     */
+-    linked = Context_GetLinkedContext(pCrlContext);
+-    CertDuplicateCRLContext(linked);
+-    ret = CertDeleteCRLFromStore(linked);
+-    return ret;
++    linked = (crl_t*)context->linked;
++    return CertDeleteCRLFromStore(&linked->ctx);
+ }
+ 
+-static BOOL CRYPT_CollectionAddCTL(WINECRYPT_CERTSTORE *store, void *ctl,
+- void *toReplace, const void **ppStoreContext)
++static BOOL Collection_addCTL(WINECRYPT_CERTSTORE *store, context_t *ctl,
++ context_t *toReplace, context_t **ppStoreContext, BOOL use_link)
+ {
+     BOOL ret;
+-    void *childContext = NULL;
++    context_t *childContext = NULL;
+     WINE_COLLECTIONSTORE *cs = (WINE_COLLECTIONSTORE*)store;
+ 
+-    ret = CRYPT_CollectionAddContext(cs, offsetof(WINECRYPT_CERTSTORE, ctls),
+-     ctl, toReplace, sizeof(CTL_CONTEXT), &childContext);
++    ret = CRYPT_CollectionAddContext(cs, offsetof(store_vtbl_t, ctls),
++     ctl, toReplace, &childContext);
+     if (ppStoreContext && childContext)
+     {
+-        WINE_STORE_LIST_ENTRY *storeEntry = *(WINE_STORE_LIST_ENTRY **)
+-         Context_GetExtra(childContext, sizeof(CTL_CONTEXT));
+-        PCTL_CONTEXT context =
+-         CRYPT_CollectionCreateContextFromChild(cs, storeEntry, childContext,
+-         sizeof(CTL_CONTEXT), TRUE);
+-
+-        if (context)
+-            context->hCertStore = store;
+-        *ppStoreContext = context;
++        WINE_STORE_LIST_ENTRY *storeEntry = childContext->u.ptr;
++        ctl_t *context = (ctl_t*)CRYPT_CollectionCreateContextFromChild(cs, storeEntry,
++         childContext);
++
++        *ppStoreContext = &context->base;
+     }
+-    CertFreeCTLContext(childContext);
++    if (childContext)
++        Context_Release(childContext);
+     return ret;
+ }
+ 
+-static void *CRYPT_CollectionEnumCTL(WINECRYPT_CERTSTORE *store, void *pPrev)
++static context_t *Collection_enumCTL(WINECRYPT_CERTSTORE *store, context_t *prev)
+ {
+     WINE_COLLECTIONSTORE *cs = (WINE_COLLECTIONSTORE*)store;
+     void *ret;
+ 
+-    TRACE("(%p, %p)\n", store, pPrev);
++    TRACE("(%p, %p)\n", store, prev);
+ 
+     EnterCriticalSection(&cs->cs);
+-    if (pPrev)
++    if (prev)
+     {
+-        WINE_STORE_LIST_ENTRY *storeEntry =
+-         *(WINE_STORE_LIST_ENTRY **)Context_GetExtra(pPrev, sizeof(CTL_CONTEXT));
++        WINE_STORE_LIST_ENTRY *storeEntry = prev->u.ptr;
+ 
+         ret = CRYPT_CollectionAdvanceEnum(cs, storeEntry,
+-         &storeEntry->store->ctls, pCTLInterface, pPrev, sizeof(CTL_CONTEXT));
++         &storeEntry->store->vtbl->ctls, prev);
+     }
+     else
+     {
+@@ -404,8 +382,7 @@
+              WINE_STORE_LIST_ENTRY, entry);
+ 
+             ret = CRYPT_CollectionAdvanceEnum(cs, storeEntry,
+-             &storeEntry->store->ctls, pCTLInterface, NULL,
+-             sizeof(CTL_CONTEXT));
++             &storeEntry->store->vtbl->ctls, NULL);
+         }
+         else
+         {
+@@ -414,29 +391,18 @@
+         }
+     }
+     LeaveCriticalSection(&cs->cs);
+-    if (ret)
+-        ((PCTL_CONTEXT)ret)->hCertStore = store;
+     TRACE("returning %p\n", ret);
+     return ret;
+ }
+ 
+-static BOOL CRYPT_CollectionDeleteCTL(WINECRYPT_CERTSTORE *store,
+- void *pCtlContext)
++static BOOL Collection_deleteCTL(WINECRYPT_CERTSTORE *store, context_t *context)
+ {
+-    BOOL ret;
+-    PCCTL_CONTEXT linked;
++    ctl_t *ctl = (ctl_t*)context, *linked;
+ 
+-    TRACE("(%p, %p)\n", store, pCtlContext);
++    TRACE("(%p, %p)\n", store, ctl);
+ 
+-    /* Deleting the linked context results in its ref count getting
+-     * decreased, but the caller of this (CertDeleteCTLFromStore) also
+-     * decreases pCtlContext's ref count, by calling CertFreeCTLContext.
+-     * Increase ref count of linked context to compensate.
+-     */
+-    linked = Context_GetLinkedContext(pCtlContext);
+-    CertDuplicateCTLContext(linked);
+-    ret = CertDeleteCTLFromStore(linked);
+-    return ret;
++    linked = (ctl_t*)context->linked;
++    return CertDeleteCTLFromStore(&linked->ctx);
+ }
+ 
+ static BOOL Collection_control(WINECRYPT_CERTSTORE *cert_store, DWORD dwFlags,
+@@ -477,8 +443,23 @@
+ }
+ 
+ static const store_vtbl_t CollectionStoreVtbl = {
+-    Collection_closeStore,
+-    Collection_control
++    Collection_addref,
++    Collection_release,
++    Collection_releaseContext,
++    Collection_control,
++    {
++        Collection_addCert,
++        Collection_enumCert,
++        Collection_deleteCert
++    }, {
++        Collection_addCRL,
++        Collection_enumCRL,
++        Collection_deleteCRL
++    }, {
++        Collection_addCTL,
++        Collection_enumCTL,
++        Collection_deleteCTL
++    }
+ };
+ 
+ WINECRYPT_CERTSTORE *CRYPT_CollectionOpenStore(HCRYPTPROV hCryptProv,
+@@ -498,15 +479,6 @@
+         {
+             memset(store, 0, sizeof(WINE_COLLECTIONSTORE));
+             CRYPT_InitStore(&store->hdr, dwFlags, StoreTypeCollection, &CollectionStoreVtbl);
+-            store->hdr.certs.addContext    = CRYPT_CollectionAddCert;
+-            store->hdr.certs.enumContext   = CRYPT_CollectionEnumCert;
+-            store->hdr.certs.deleteContext = CRYPT_CollectionDeleteCert;
+-            store->hdr.crls.addContext     = CRYPT_CollectionAddCRL;
+-            store->hdr.crls.enumContext    = CRYPT_CollectionEnumCRL;
+-            store->hdr.crls.deleteContext  = CRYPT_CollectionDeleteCRL;
+-            store->hdr.ctls.addContext     = CRYPT_CollectionAddCTL;
+-            store->hdr.ctls.enumContext    = CRYPT_CollectionEnumCTL;
+-            store->hdr.ctls.deleteContext  = CRYPT_CollectionDeleteCTL;
+             InitializeCriticalSection(&store->cs);
+             store->cs.DebugInfo->Spare[0] = (DWORD_PTR)(__FILE__ ": PWINE_COLLECTIONSTORE->cs");
+             list_init(&store->stores);
+diff -Naur a/dlls/crypt32/context.c b/dlls/crypt32/context.c
+--- a/dlls/crypt32/context.c	2013-10-11 17:21:06.000000000 +0000
++++ b/dlls/crypt32/context.c	2013-10-25 17:45:30.000000000 +0000
+@@ -21,281 +21,111 @@
+ #include "winbase.h"
+ #include "wincrypt.h"
+ #include "wine/debug.h"
+-#include "wine/list.h"
+ #include "crypt32_private.h"
+ 
+ WINE_DEFAULT_DEBUG_CHANNEL(context);
+ 
+-typedef enum _ContextType {
+-    ContextTypeData,
+-    ContextTypeLink,
+-} ContextType;
+-
+-typedef struct _BASE_CONTEXT
++context_t *Context_CreateDataContext(size_t contextSize, const context_vtbl_t *vtbl, WINECRYPT_CERTSTORE *store)
+ {
+-    LONG        ref;
+-    ContextType type;
+-    union {
+-        CONTEXT_PROPERTY_LIST *properties;
+-        struct _BASE_CONTEXT *linked;
+-    } u;
+-} BASE_CONTEXT;
+-
+-#define CONTEXT_FROM_BASE_CONTEXT(p) (void*)(p+1)
+-#define BASE_CONTEXT_FROM_CONTEXT(p) ((BASE_CONTEXT*)(p)-1)
++    context_t *context;
+ 
+-void *Context_CreateDataContext(size_t contextSize)
+-{
+-    BASE_CONTEXT *context;
+-
+-    context = CryptMemAlloc(contextSize + sizeof(BASE_CONTEXT));
++    context = CryptMemAlloc(sizeof(context_t) + contextSize);
+     if (!context)
+         return NULL;
+ 
+-    context->ref = 1;
+-    context->type = ContextTypeData;
+-    context->u.properties = ContextPropertyList_Create();
+-    if (!context->u.properties)
++    context->properties = ContextPropertyList_Create();
++    if (!context->properties)
+     {
+         CryptMemFree(context);
+         return NULL;
+     }
+ 
++    context->vtbl = vtbl;
++    context->ref = 1;
++    context->linked = NULL;
++
++    store->vtbl->addref(store);
++    context->store = store;
++
+     TRACE("returning %p\n", context);
+-    return CONTEXT_FROM_BASE_CONTEXT(context);
++    return context;
+ }
+ 
+-void *Context_CreateLinkContext(unsigned int contextSize, void *linked, unsigned int extra,
+- BOOL addRef)
++context_t *Context_CreateLinkContext(unsigned int contextSize, context_t *linked, WINECRYPT_CERTSTORE *store)
+ {
+-    BASE_CONTEXT *context;
++    context_t *context;
+ 
+-    TRACE("(%d, %p, %d)\n", contextSize, linked, extra);
++    TRACE("(%d, %p)\n", contextSize, linked);
+ 
+-    context = CryptMemAlloc(contextSize + sizeof(BASE_CONTEXT) + extra);
++    context = CryptMemAlloc(sizeof(context_t) + contextSize);
+     if (!context)
+         return NULL;
+ 
+-    memcpy(CONTEXT_FROM_BASE_CONTEXT(context), linked, contextSize);
++    memcpy(context_ptr(context), context_ptr(linked), contextSize);
++    context->vtbl = linked->vtbl;
+     context->ref = 1;
+-    context->type = ContextTypeLink;
+-    context->u.linked = BASE_CONTEXT_FROM_CONTEXT(linked);
+-    if (addRef)
+-        Context_AddRef(linked);
++    context->linked = linked;
++    context->properties = linked->properties;
++    Context_AddRef(linked);
++
++    store->vtbl->addref(store);
++    context->store = store;
+ 
+     TRACE("returning %p\n", context);
+-    return CONTEXT_FROM_BASE_CONTEXT(context);
++    return context;
+ }
+ 
+-void Context_AddRef(void *context)
++void Context_AddRef(context_t *context)
+ {
+-    BASE_CONTEXT *baseContext = BASE_CONTEXT_FROM_CONTEXT(context);
++    LONG ref = InterlockedIncrement(&context->ref);
++
++    TRACE("(%p) ref=%d\n", context, context->ref);
+ 
+-    InterlockedIncrement(&baseContext->ref);
+-    TRACE("%p's ref count is %d\n", context, baseContext->ref);
++    if(ref == 1) {
++        /* This is the first external (non-store) reference. Increase store ref cnt. */
++        context->store->vtbl->addref(context->store);
++    }
+ }
+ 
+-void *Context_GetExtra(const void *context, size_t contextSize)
++void Context_Free(context_t *context)
+ {
+-    BASE_CONTEXT *baseContext = BASE_CONTEXT_FROM_CONTEXT(context);
++    TRACE("(%p)\n", context);
+ 
+-    assert(baseContext->type == ContextTypeLink);
+-    return (LPBYTE)CONTEXT_FROM_BASE_CONTEXT(baseContext) + contextSize;
+-}
++    assert(!context->ref);
+ 
+-void *Context_GetLinkedContext(void *context)
+-{
+-    BASE_CONTEXT *baseContext = BASE_CONTEXT_FROM_CONTEXT(context);
++    if (!context->linked) {
++        ContextPropertyList_Free(context->properties);
++        context->vtbl->free(context);
++    }else {
++        Context_Release(context->linked);
++    }
+ 
+-    assert(baseContext->type == ContextTypeLink);
+-    return CONTEXT_FROM_BASE_CONTEXT(baseContext->u.linked);
++    CryptMemFree(context);
+ }
+ 
+-CONTEXT_PROPERTY_LIST *Context_GetProperties(const void *context)
++void Context_Release(context_t *context)
+ {
+-    BASE_CONTEXT *ptr = BASE_CONTEXT_FROM_CONTEXT(context);
++    LONG ref = InterlockedDecrement(&context->ref);
+ 
+-    while (ptr && ptr->type == ContextTypeLink)
+-        ptr = ptr->u.linked;
+-
+-    return (ptr && ptr->type == ContextTypeData) ? ptr->u.properties : NULL;
+-}
++    TRACE("(%p) ref=%d\n", context, ref);
++    assert(ref >= 0);
+ 
+-BOOL Context_Release(void *context, ContextFreeFunc dataContextFree)
+-{
+-    BASE_CONTEXT *base = BASE_CONTEXT_FROM_CONTEXT(context);
+-    BOOL ret = TRUE;
++    if (!ref) {
++        WINECRYPT_CERTSTORE *store = context->store;
+ 
+-    if (base->ref <= 0)
+-    {
+-        ERR("%p's ref count is %d\n", context, base->ref);
+-        return FALSE;
++        /* This is the last reference, but the context still may be in a store.
++         * We release our store reference, but leave it up to store to free or keep the context. */
++        store->vtbl->releaseContext(store, context);
++        store->vtbl->release(store, 0);
+     }
+-    if (InterlockedDecrement(&base->ref) == 0)
+-    {
+-        TRACE("freeing %p\n", context);
+-        if (base->type == ContextTypeData)
+-        {
+-            ContextPropertyList_Free(base->u.properties);
+-            dataContextFree(context);
+-        } else {
+-            Context_Release(CONTEXT_FROM_BASE_CONTEXT(base->u.linked), dataContextFree);
+-        }
+-        CryptMemFree(base);
+-    }
+-    else
+-        TRACE("%p's ref count is %d\n", context, base->ref);
+-    return ret;
+ }
+ 
+ void Context_CopyProperties(const void *to, const void *from)
+ {
+     CONTEXT_PROPERTY_LIST *toProperties, *fromProperties;
+ 
+-    toProperties = Context_GetProperties(to);
+-    fromProperties = Context_GetProperties(from);
++    toProperties = context_from_ptr(to)->properties;
++    fromProperties = context_from_ptr(from)->properties;
+     assert(toProperties && fromProperties);
+     ContextPropertyList_Copy(toProperties, fromProperties);
+ }
+-
+-struct ContextList
+-{
+-    const WINE_CONTEXT_INTERFACE *contextInterface;
+-    size_t contextSize;
+-    CRITICAL_SECTION cs;
+-    struct list contexts;
+-};
+-
+-struct ContextList *ContextList_Create(
+- const WINE_CONTEXT_INTERFACE *contextInterface, size_t contextSize)
+-{
+-    struct ContextList *list = CryptMemAlloc(sizeof(struct ContextList));
+-
+-    if (list)
+-    {
+-        list->contextInterface = contextInterface;
+-        list->contextSize = contextSize;
+-        InitializeCriticalSection(&list->cs);
+-        list->cs.DebugInfo->Spare[0] = (DWORD_PTR)(__FILE__ ": ContextList.cs");
+-        list_init(&list->contexts);
+-    }
+-    return list;
+-}
+-
+-static inline struct list *ContextList_ContextToEntry(const struct ContextList *list,
+- const void *context)
+-{
+-    struct list *ret;
+-
+-    if (context)
+-        ret = Context_GetExtra(context, list->contextSize);
+-    else
+-        ret = NULL;
+-    return ret;
+-}
+-
+-static inline void *ContextList_EntryToContext(const struct ContextList *list,
+- struct list *entry)
+-{
+-    return (LPBYTE)entry - list->contextSize;
+-}
+-
+-void *ContextList_Add(struct ContextList *list, void *toLink, void *toReplace)
+-{
+-    void *context;
+-
+-    TRACE("(%p, %p, %p)\n", list, toLink, toReplace);
+-
+-    context = Context_CreateLinkContext(list->contextSize, toLink,
+-     sizeof(struct list), TRUE);
+-    if (context)
+-    {
+-        struct list *entry = ContextList_ContextToEntry(list, context);
+-
+-        TRACE("adding %p\n", context);
+-        EnterCriticalSection(&list->cs);
+-        if (toReplace)
+-        {
+-            struct list *existing = ContextList_ContextToEntry(list, toReplace);
+-
+-            entry->prev = existing->prev;
+-            entry->next = existing->next;
+-            entry->prev->next = entry;
+-            entry->next->prev = entry;
+-            existing->prev = existing->next = existing;
+-            list->contextInterface->free(toReplace);
+-        }
+-        else
+-            list_add_head(&list->contexts, entry);
+-        LeaveCriticalSection(&list->cs);
+-    }
+-    return context;
+-}
+-
+-void *ContextList_Enum(struct ContextList *list, void *pPrev)
+-{
+-    struct list *listNext;
+-    void *ret;
+-
+-    EnterCriticalSection(&list->cs);
+-    if (pPrev)
+-    {
+-        struct list *prevEntry = ContextList_ContextToEntry(list, pPrev);
+-
+-        listNext = list_next(&list->contexts, prevEntry);
+-        list->contextInterface->free(pPrev);
+-    }
+-    else
+-        listNext = list_next(&list->contexts, &list->contexts);
+-    LeaveCriticalSection(&list->cs);
+-
+-    if (listNext)
+-    {
+-        ret = ContextList_EntryToContext(list, listNext);
+-        list->contextInterface->duplicate(ret);
+-    }
+-    else
+-        ret = NULL;
+-    return ret;
+-}
+-
+-BOOL ContextList_Remove(struct ContextList *list, void *context)
+-{
+-    struct list *entry = ContextList_ContextToEntry(list, context);
+-    BOOL inList = FALSE;
+-
+-    EnterCriticalSection(&list->cs);
+-    if (!list_empty(entry))
+-    {
+-        list_remove(entry);
+-        inList = TRUE;
+-    }
+-    LeaveCriticalSection(&list->cs);
+-    if (inList)
+-        list_init(entry);
+-    return inList;
+-}
+-
+-static void ContextList_Empty(struct ContextList *list)
+-{
+-    struct list *entry, *next;
+-
+-    EnterCriticalSection(&list->cs);
+-    LIST_FOR_EACH_SAFE(entry, next, &list->contexts)
+-    {
+-        const void *context = ContextList_EntryToContext(list, entry);
+-
+-        TRACE("removing %p\n", context);
+-        list_remove(entry);
+-        list->contextInterface->free(context);
+-    }
+-    LeaveCriticalSection(&list->cs);
+-}
+-
+-void ContextList_Free(struct ContextList *list)
+-{
+-    ContextList_Empty(list);
+-    list->cs.DebugInfo->Spare[0] = 0;
+-    DeleteCriticalSection(&list->cs);
+-    CryptMemFree(list);
+-}
+diff -Naur a/dlls/crypt32/crl.c b/dlls/crypt32/crl.c
+--- a/dlls/crypt32/crl.c	2013-10-11 17:21:06.000000000 +0000
++++ b/dlls/crypt32/crl.c	2013-10-25 17:45:30.000000000 +0000
+@@ -29,12 +29,66 @@
+ 
+ WINE_DEFAULT_DEBUG_CHANNEL(crypt);
+ 
++static void CRL_free(context_t *context)
++{
++    crl_t *crl = (crl_t*)context;
++
++    CryptMemFree(crl->ctx.pbCrlEncoded);
++    LocalFree(crl->ctx.pCrlInfo);
++}
++
++static const context_vtbl_t crl_vtbl;
++
++static context_t *CRL_clone(context_t *context, WINECRYPT_CERTSTORE *store, BOOL use_link)
++{
++    crl_t *crl;
++
++    if(use_link) {
++        crl = (crl_t*)Context_CreateLinkContext(sizeof(CRL_CONTEXT), context, store);
++        if(!crl)
++            return NULL;
++    }else {
++        const crl_t *cloned = (const crl_t*)context;
++        DWORD size = 0;
++        BOOL res;
++
++        crl = (crl_t*)Context_CreateDataContext(sizeof(CRL_CONTEXT), &crl_vtbl, store);
++        if(!crl)
++            return NULL;
++
++        Context_CopyProperties(&crl->ctx, &cloned->ctx);
++
++        crl->ctx.dwCertEncodingType = cloned->ctx.dwCertEncodingType;
++        crl->ctx.pbCrlEncoded = CryptMemAlloc(cloned->ctx.cbCrlEncoded);
++        memcpy(crl->ctx.pbCrlEncoded, cloned->ctx.pbCrlEncoded, cloned->ctx.cbCrlEncoded);
++        crl->ctx.cbCrlEncoded = cloned->ctx.cbCrlEncoded;
++
++        /* FIXME: We don't need to decode the object here, we could just clone crl info. */
++        res = CryptDecodeObjectEx(crl->ctx.dwCertEncodingType, X509_CERT_CRL_TO_BE_SIGNED,
++         crl->ctx.pbCrlEncoded, crl->ctx.cbCrlEncoded, CRYPT_DECODE_ALLOC_FLAG, NULL,
++         &crl->ctx.pCrlInfo, &size);
++        if(!res) {
++            CertFreeCRLContext(&crl->ctx);
++            return NULL;
++        }
++    }
++
++    crl->ctx.hCertStore = store;
++    return &crl->base;
++}
++
++static const context_vtbl_t crl_vtbl = {
++    CRL_free,
++    CRL_clone
++};
++
+ PCCRL_CONTEXT WINAPI CertCreateCRLContext(DWORD dwCertEncodingType,
+  const BYTE* pbCrlEncoded, DWORD cbCrlEncoded)
+ {
+-    PCRL_CONTEXT crl = NULL;
++    crl_t *crl = NULL;
+     BOOL ret;
+     PCRL_INFO crlInfo = NULL;
++    BYTE *data = NULL;
+     DWORD size = 0;
+ 
+     TRACE("(%08x, %p, %d)\n", dwCertEncodingType, pbCrlEncoded,
+@@ -48,30 +102,28 @@
+     ret = CryptDecodeObjectEx(dwCertEncodingType, X509_CERT_CRL_TO_BE_SIGNED,
+      pbCrlEncoded, cbCrlEncoded, CRYPT_DECODE_ALLOC_FLAG, NULL,
+      &crlInfo, &size);
+-    if (ret)
+-    {
+-        BYTE *data = NULL;
++    if (!ret)
++        return NULL;
++
++    crl = (crl_t*)Context_CreateDataContext(sizeof(CRL_CONTEXT), &crl_vtbl, &empty_store);
++    if (!crl)
++        return NULL;
+ 
+-        crl = Context_CreateDataContext(sizeof(CRL_CONTEXT));
+-        if (!crl)
+-            goto end;
+-        data = CryptMemAlloc(cbCrlEncoded);
+-        if (!data)
+-        {
+-            CertFreeCRLContext(crl);
+-            crl = NULL;
+-            goto end;
+-        }
+-        memcpy(data, pbCrlEncoded, cbCrlEncoded);
+-        crl->dwCertEncodingType = dwCertEncodingType;
+-        crl->pbCrlEncoded       = data;
+-        crl->cbCrlEncoded       = cbCrlEncoded;
+-        crl->pCrlInfo           = crlInfo;
+-        crl->hCertStore         = 0;
++    data = CryptMemAlloc(cbCrlEncoded);
++    if (!data)
++    {
++        Context_Release(&crl->base);
++        return NULL;
+     }
+ 
+-end:
+-    return crl;
++    memcpy(data, pbCrlEncoded, cbCrlEncoded);
++    crl->ctx.dwCertEncodingType = dwCertEncodingType;
++    crl->ctx.pbCrlEncoded       = data;
++    crl->ctx.cbCrlEncoded       = cbCrlEncoded;
++    crl->ctx.pCrlInfo           = crlInfo;
++    crl->ctx.hCertStore         = &empty_store;
++
++    return &crl->ctx;
+ }
+ 
+ BOOL WINAPI CertAddEncodedCRLToStore(HCERTSTORE hCertStore,
+@@ -327,48 +379,31 @@
+ {
+     TRACE("(%p)\n", pCrlContext);
+     if (pCrlContext)
+-        Context_AddRef((void *)pCrlContext);
++        Context_AddRef(&crl_from_ptr(pCrlContext)->base);
+     return pCrlContext;
+ }
+ 
+-static void CrlDataContext_Free(void *context)
+-{
+-    PCRL_CONTEXT crlContext = context;
+-
+-    CryptMemFree(crlContext->pbCrlEncoded);
+-    LocalFree(crlContext->pCrlInfo);
+-}
+-
+-BOOL WINAPI CertFreeCRLContext( PCCRL_CONTEXT pCrlContext)
++BOOL WINAPI CertFreeCRLContext(PCCRL_CONTEXT pCrlContext)
+ {
+-    BOOL ret = TRUE;
+-
+     TRACE("(%p)\n", pCrlContext);
+ 
+     if (pCrlContext)
+-        ret = Context_Release((void *)pCrlContext, CrlDataContext_Free);
+-    return ret;
++        Context_Release(&crl_from_ptr(pCrlContext)->base);
++    return TRUE;
+ }
+ 
+ DWORD WINAPI CertEnumCRLContextProperties(PCCRL_CONTEXT pCRLContext,
+  DWORD dwPropId)
+ {
+-    CONTEXT_PROPERTY_LIST *properties = Context_GetProperties(pCRLContext);
+-    DWORD ret;
+-
+     TRACE("(%p, %d)\n", pCRLContext, dwPropId);
+ 
+-    if (properties)
+-        ret = ContextPropertyList_EnumPropIDs(properties, dwPropId);
+-    else
+-        ret = 0;
+-    return ret;
++    return ContextPropertyList_EnumPropIDs(crl_from_ptr(pCRLContext)->base.properties, dwPropId);
+ }
+ 
+-static BOOL CRLContext_SetProperty(PCCRL_CONTEXT context, DWORD dwPropId,
++static BOOL CRLContext_SetProperty(crl_t *crl, DWORD dwPropId,
+                                    DWORD dwFlags, const void *pvData);
+ 
+-static BOOL CRLContext_GetHashProp(PCCRL_CONTEXT context, DWORD dwPropId,
++static BOOL CRLContext_GetHashProp(crl_t *crl, DWORD dwPropId,
+  ALG_ID algID, const BYTE *toHash, DWORD toHashLen, void *pvData,
+  DWORD *pcbData)
+ {
+@@ -378,22 +413,21 @@
+     {
+         CRYPT_DATA_BLOB blob = { *pcbData, pvData };
+ 
+-        ret = CRLContext_SetProperty(context, dwPropId, 0, &blob);
++        ret = CRLContext_SetProperty(crl, dwPropId, 0, &blob);
+     }
+     return ret;
+ }
+ 
+-static BOOL CRLContext_GetProperty(PCCRL_CONTEXT context, DWORD dwPropId,
++static BOOL CRLContext_GetProperty(crl_t *crl, DWORD dwPropId,
+                                    void *pvData, DWORD *pcbData)
+ {
+-    CONTEXT_PROPERTY_LIST *properties = Context_GetProperties(context);
+     BOOL ret;
+     CRYPT_DATA_BLOB blob;
+ 
+-    TRACE("(%p, %d, %p, %p)\n", context, dwPropId, pvData, pcbData);
++    TRACE("(%p, %d, %p, %p)\n", crl, dwPropId, pvData, pcbData);
+ 
+-    if (properties)
+-        ret = ContextPropertyList_FindProperty(properties, dwPropId, &blob);
++    if (crl->base.properties)
++        ret = ContextPropertyList_FindProperty(crl->base.properties, dwPropId, &blob);
+     else
+         ret = FALSE;
+     if (ret)
+@@ -418,13 +452,13 @@
+         switch (dwPropId)
+         {
+         case CERT_SHA1_HASH_PROP_ID:
+-            ret = CRLContext_GetHashProp(context, dwPropId, CALG_SHA1,
+-                                         context->pbCrlEncoded, context->cbCrlEncoded, pvData,
++            ret = CRLContext_GetHashProp(crl, dwPropId, CALG_SHA1,
++                                         crl->ctx.pbCrlEncoded, crl->ctx.cbCrlEncoded, pvData,
+              pcbData);
+             break;
+         case CERT_MD5_HASH_PROP_ID:
+-            ret = CRLContext_GetHashProp(context, dwPropId, CALG_MD5,
+-                                         context->pbCrlEncoded, context->cbCrlEncoded, pvData,
++            ret = CRLContext_GetHashProp(crl, dwPropId, CALG_MD5,
++                                         crl->ctx.pbCrlEncoded, crl->ctx.cbCrlEncoded, pvData,
+              pcbData);
+             break;
+         default:
+@@ -465,36 +499,27 @@
+         }
+         else
+         {
+-            if (pCRLContext->hCertStore)
+-                ret = CertGetStoreProperty(pCRLContext->hCertStore, dwPropId,
+-                 pvData, pcbData);
+-            else
+-            {
+-                *(DWORD *)pvData = 0;
+-                ret = TRUE;
+-            }
++            ret = CertGetStoreProperty(pCRLContext->hCertStore, dwPropId, pvData, pcbData);
+         }
+         break;
+     default:
+-        ret = CRLContext_GetProperty(pCRLContext, dwPropId, pvData,
+-         pcbData);
++        ret = CRLContext_GetProperty(crl_from_ptr(pCRLContext), dwPropId, pvData, pcbData);
+     }
+     return ret;
+ }
+ 
+-static BOOL CRLContext_SetProperty(PCCRL_CONTEXT context, DWORD dwPropId,
++static BOOL CRLContext_SetProperty(crl_t *crl, DWORD dwPropId,
+  DWORD dwFlags, const void *pvData)
+ {
+-    CONTEXT_PROPERTY_LIST *properties = Context_GetProperties(context);
+     BOOL ret;
+ 
+-    TRACE("(%p, %d, %08x, %p)\n", context, dwPropId, dwFlags, pvData);
++    TRACE("(%p, %d, %08x, %p)\n", crl, dwPropId, dwFlags, pvData);
+ 
+-    if (!properties)
++    if (!crl->base.properties)
+         ret = FALSE;
+     else if (!pvData)
+     {
+-        ContextPropertyList_RemoveProperty(properties, dwPropId);
++        ContextPropertyList_RemoveProperty(crl->base.properties, dwPropId);
+         ret = TRUE;
+     }
+     else
+@@ -521,12 +546,12 @@
+         {
+             PCRYPT_DATA_BLOB blob = (PCRYPT_DATA_BLOB)pvData;
+ 
+-            ret = ContextPropertyList_SetProperty(properties, dwPropId,
++            ret = ContextPropertyList_SetProperty(crl->base.properties, dwPropId,
+              blob->pbData, blob->cbData);
+             break;
+         }
+         case CERT_DATE_STAMP_PROP_ID:
+-            ret = ContextPropertyList_SetProperty(properties, dwPropId,
++            ret = ContextPropertyList_SetProperty(crl->base.properties, dwPropId,
+              pvData, sizeof(FILETIME));
+             break;
+         default:
+@@ -558,7 +583,7 @@
+         SetLastError(E_INVALIDARG);
+         return FALSE;
+     }
+-    ret = CRLContext_SetProperty(pCRLContext, dwPropId, dwFlags, pvData);
++    ret = CRLContext_SetProperty(crl_from_ptr(pCRLContext), dwPropId, dwFlags, pvData);
+     TRACE("returning %d\n", ret);
+     return ret;
+ }
+diff -Naur a/dlls/crypt32/crypt32_private.h b/dlls/crypt32/crypt32_private.h
+--- a/dlls/crypt32/crypt32_private.h	2013-10-11 17:21:06.000000000 +0000
++++ b/dlls/crypt32/crypt32_private.h	2013-10-25 17:45:30.000000000 +0000
+@@ -19,6 +19,8 @@
+ #ifndef __CRYPT32_PRIVATE_H__
+ #define __CRYPT32_PRIVATE_H__
+ 
++#include "wine/list.h"
++
+ /* a few asn.1 tags we need */
+ #define ASN_BOOL            (ASN_UNIVERSAL | ASN_PRIMITIVE | 0x01)
+ #define ASN_BITSTRING       (ASN_UNIVERSAL | ASN_PRIMITIVE | 0x03)
+@@ -157,6 +159,70 @@
+ void root_store_free(void) DECLSPEC_HIDDEN;
+ void default_chain_engine_free(void) DECLSPEC_HIDDEN;
+ 
++/* (Internal) certificate store types and functions */
++struct WINE_CRYPTCERTSTORE;
++
++typedef struct _CONTEXT_PROPERTY_LIST CONTEXT_PROPERTY_LIST;
++
++typedef struct _context_t context_t;
++
++typedef struct {
++    void (*free)(context_t*);
++    struct _context_t *(*clone)(context_t*,struct WINE_CRYPTCERTSTORE*,BOOL);
++} context_vtbl_t;
++
++struct _context_t {
++    const context_vtbl_t *vtbl;
++    LONG ref;
++    struct WINE_CRYPTCERTSTORE *store;
++    struct _context_t *linked;
++    CONTEXT_PROPERTY_LIST *properties;
++    union {
++        struct list entry;
++        void *ptr;
++    } u;
++};
++
++static inline context_t *context_from_ptr(const void *ptr)
++{
++    return (context_t*)ptr-1;
++}
++
++static inline void *context_ptr(context_t *context)
++{
++    return context+1;
++}
++
++typedef struct {
++    context_t base;
++    CERT_CONTEXT ctx;
++} cert_t;
++
++static inline cert_t *cert_from_ptr(const CERT_CONTEXT *ptr)
++{
++    return CONTAINING_RECORD(ptr, cert_t, ctx);
++}
++
++typedef struct {
++    context_t base;
++    CRL_CONTEXT ctx;
++} crl_t;
++
++static inline crl_t *crl_from_ptr(const CRL_CONTEXT *ptr)
++{
++    return CONTAINING_RECORD(ptr, crl_t, ctx);
++}
++
++typedef struct {
++    context_t base;
++    CTL_CONTEXT ctx;
++} ctl_t;
++
++static inline ctl_t *ctl_from_ptr(const CTL_CONTEXT *ptr)
++{
++    return CONTAINING_RECORD(ptr, ctl_t, ctx);
++}
++
+ /* Some typedefs that make it easier to abstract which type of context we're
+  * working with.
+  */
+@@ -167,7 +233,6 @@
+ typedef BOOL (WINAPI *AddEncodedContextToStoreFunc)(HCERTSTORE hCertStore,
+  DWORD dwCertEncodingType, const BYTE *pbEncoded, DWORD cbEncoded,
+  DWORD dwAddDisposition, const void **ppContext);
+-typedef const void *(WINAPI *DuplicateContextFunc)(const void *context);
+ typedef const void *(WINAPI *EnumContextsInStoreFunc)(HCERTSTORE hCertStore,
+  const void *pPrevContext);
+ typedef DWORD (WINAPI *EnumPropertiesFunc)(const void *context, DWORD dwPropId);
+@@ -177,7 +242,6 @@
+  DWORD dwPropID, DWORD dwFlags, const void *pvData);
+ typedef BOOL (WINAPI *SerializeElementFunc)(const void *context, DWORD dwFlags,
+  BYTE *pbElement, DWORD *pcbElement);
+-typedef BOOL (WINAPI *FreeContextFunc)(const void *context);
+ typedef BOOL (WINAPI *DeleteContextFunc)(const void *contex);
+ 
+ /* An abstract context (certificate, CRL, or CTL) interface */
+@@ -186,13 +250,11 @@
+     CreateContextFunc            create;
+     AddContextToStoreFunc        addContextToStore;
+     AddEncodedContextToStoreFunc addEncodedToStore;
+-    DuplicateContextFunc         duplicate;
+     EnumContextsInStoreFunc      enumContextsInStore;
+     EnumPropertiesFunc           enumProps;
+     GetContextPropertyFunc       getProp;
+     SetContextPropertyFunc       setProp;
+     SerializeElementFunc         serialize;
+-    FreeContextFunc              free;
+     DeleteContextFunc            deleteFromStore;
+ } WINE_CONTEXT_INTERFACE;
+ 
+@@ -200,41 +262,29 @@
+ extern const WINE_CONTEXT_INTERFACE *pCRLInterface DECLSPEC_HIDDEN;
+ extern const WINE_CONTEXT_INTERFACE *pCTLInterface DECLSPEC_HIDDEN;
+ 
+-/* (Internal) certificate store types and functions */
+-struct WINE_CRYPTCERTSTORE;
+-
+ typedef struct WINE_CRYPTCERTSTORE * (*StoreOpenFunc)(HCRYPTPROV hCryptProv,
+  DWORD dwFlags, const void *pvPara);
+ 
+-/* Called to enumerate the next context in a store. */
+-typedef void * (*EnumFunc)(struct WINE_CRYPTCERTSTORE *store, void *pPrev);
+-
+-/* Called to add a context to a store.  If toReplace is not NULL,
+- * context replaces toReplace in the store, and access checks should not be
+- * performed.  Otherwise context is a new context, and it should only be
+- * added if the store allows it.  If ppStoreContext is not NULL, the added
+- * context should be returned in *ppStoreContext.
+- */
+-typedef BOOL (*AddFunc)(struct WINE_CRYPTCERTSTORE *store, void *context,
+- void *toReplace, const void **ppStoreContext);
+-
+-typedef BOOL (*DeleteFunc)(struct WINE_CRYPTCERTSTORE *store, void *context);
+-
+ typedef struct _CONTEXT_FUNCS
+ {
+-    AddFunc    addContext;
+-    EnumFunc   enumContext;
+-    DeleteFunc deleteContext;
++  /* Called to add a context to a store.  If toReplace is not NULL,
++   * context replaces toReplace in the store, and access checks should not be
++   * performed.  Otherwise context is a new context, and it should only be
++   * added if the store allows it.  If ppStoreContext is not NULL, the added
++   * context should be returned in *ppStoreContext.
++   */
++    BOOL (*addContext)(struct WINE_CRYPTCERTSTORE*,context_t*,context_t*,context_t**,BOOL);
++    context_t *(*enumContext)(struct WINE_CRYPTCERTSTORE *store, context_t *prev);
++    BOOL (*delete)(struct WINE_CRYPTCERTSTORE*,context_t*);
+ } CONTEXT_FUNCS;
+ 
+ typedef enum _CertStoreType {
+     StoreTypeMem,
+     StoreTypeCollection,
+     StoreTypeProvider,
++    StoreTypeEmpty
+ } CertStoreType;
+ 
+-typedef struct _CONTEXT_PROPERTY_LIST CONTEXT_PROPERTY_LIST;
+-
+ #define WINE_CRYPTCERTSTORE_MAGIC 0x74726563
+ 
+ /* A cert store is polymorphic through the use of function pointers.  A type
+@@ -246,8 +296,13 @@
+  */
+ 
+ typedef struct {
+-    void (*closeStore)(struct WINE_CRYPTCERTSTORE*,DWORD);
++    void (*addref)(struct WINE_CRYPTCERTSTORE*);
++    DWORD (*release)(struct WINE_CRYPTCERTSTORE*,DWORD);
++    void (*releaseContext)(struct WINE_CRYPTCERTSTORE*,context_t*);
+     BOOL (*control)(struct WINE_CRYPTCERTSTORE*,DWORD,DWORD,void const*);
++    CONTEXT_FUNCS certs;
++    CONTEXT_FUNCS crls;
++    CONTEXT_FUNCS ctls;
+ } store_vtbl_t;
+ 
+ typedef struct WINE_CRYPTCERTSTORE
+@@ -257,10 +312,6 @@
+     DWORD                       dwOpenFlags;
+     CertStoreType               type;
+     const store_vtbl_t         *vtbl;
+-    /* FIXME: Move to vtbl (requires collections clean up) */
+-    CONTEXT_FUNCS               certs;
+-    CONTEXT_FUNCS               crls;
+-    CONTEXT_FUNCS               ctls;
+     CONTEXT_PROPERTY_LIST      *properties;
+ } WINECRYPT_CERTSTORE;
+ 
+@@ -338,42 +389,21 @@
+  * which should be one of CERT_CONTEXT, CRL_CONTEXT, or CTL_CONTEXT.
+  * Free with Context_Release.
+  */
+-void *Context_CreateDataContext(size_t contextSize) DECLSPEC_HIDDEN;
++context_t *Context_CreateDataContext(size_t contextSize, const context_vtbl_t *vtbl, struct WINE_CRYPTCERTSTORE*) DECLSPEC_HIDDEN;
+ 
+-/* Creates a new link context with extra bytes.  The context refers to linked
++/* Creates a new link context.  The context refers to linked
+  * rather than owning its own properties.  If addRef is TRUE (which ordinarily
+  * it should be) linked is addref'd.
+  * Free with Context_Release.
+  */
+-void *Context_CreateLinkContext(unsigned int contextSize, void *linked, unsigned int extra,
+- BOOL addRef) DECLSPEC_HIDDEN;
+-
+-/* Returns a pointer to the extra bytes allocated with context, which must be
+- * a link context.
+- */
+-void *Context_GetExtra(const void *context, size_t contextSize) DECLSPEC_HIDDEN;
+-
+-/* Gets the context linked to by context, which must be a link context. */
+-void *Context_GetLinkedContext(void *context) DECLSPEC_HIDDEN;
++context_t *Context_CreateLinkContext(unsigned contextSize, context_t *linked, struct WINE_CRYPTCERTSTORE*) DECLSPEC_HIDDEN;
+ 
+ /* Copies properties from fromContext to toContext. */
+ void Context_CopyProperties(const void *to, const void *from) DECLSPEC_HIDDEN;
+ 
+-/* Returns context's properties, or the linked context's properties if context
+- * is a link context.
+- */
+-CONTEXT_PROPERTY_LIST *Context_GetProperties(const void *context) DECLSPEC_HIDDEN;
+-
+-void Context_AddRef(void *context) DECLSPEC_HIDDEN;
+-
+-typedef void (*ContextFreeFunc)(void *context);
+-
+-/* Decrements context's ref count.  If context is a link context, releases its
+- * linked context as well.
+- * If a data context has its ref count reach 0, calls dataContextFree on it.
+- * Returns FALSE if the reference count is <= 0 when called.
+- */
+-BOOL Context_Release(void *context, ContextFreeFunc dataContextFree) DECLSPEC_HIDDEN;
++void Context_AddRef(context_t*) DECLSPEC_HIDDEN;
++void Context_Release(context_t *context) DECLSPEC_HIDDEN;
++void Context_Free(context_t*) DECLSPEC_HIDDEN;
+ 
+ /**
+  *  Context property list functions
+@@ -400,25 +430,8 @@
+ 
+ void ContextPropertyList_Free(CONTEXT_PROPERTY_LIST *list) DECLSPEC_HIDDEN;
+ 
+-/**
+- *  Context list functions.  A context list is a simple list of link contexts.
+- */
+-struct ContextList;
+-
+-struct ContextList *ContextList_Create(
+- const WINE_CONTEXT_INTERFACE *contextInterface, size_t contextSize) DECLSPEC_HIDDEN;
+-
+-void *ContextList_Add(struct ContextList *list, void *toLink, void *toReplace) DECLSPEC_HIDDEN;
+-
+-void *ContextList_Enum(struct ContextList *list, void *pPrev) DECLSPEC_HIDDEN;
+-
+-/* Removes a context from the list.  Returns TRUE if the context was removed,
+- * or FALSE if not.  (The context may have been duplicated, so subsequent
+- * removes have no effect.)
+- */
+-BOOL ContextList_Remove(struct ContextList *list, void *context) DECLSPEC_HIDDEN;
+-
+-void ContextList_Free(struct ContextList *list) DECLSPEC_HIDDEN;
++extern WINECRYPT_CERTSTORE empty_store;
++void init_empty_store(void) DECLSPEC_HIDDEN;
+ 
+ /**
+  *  Utilities.
+diff -Naur a/dlls/crypt32/ctl.c b/dlls/crypt32/ctl.c
+--- a/dlls/crypt32/ctl.c	2013-10-11 17:21:06.000000000 +0000
++++ b/dlls/crypt32/ctl.c	2013-10-25 17:45:30.000000000 +0000
+@@ -29,6 +29,38 @@
+ 
+ WINE_DEFAULT_DEBUG_CHANNEL(crypt);
+ 
++static void CTL_free(context_t *context)
++{
++    ctl_t *ctl = (ctl_t*)context;
++
++    CryptMsgClose(ctl->ctx.hCryptMsg);
++    CryptMemFree(ctl->ctx.pbCtlEncoded);
++    CryptMemFree(ctl->ctx.pbCtlContext);
++    LocalFree(ctl->ctx.pCtlInfo);
++}
++
++static context_t *CTL_clone(context_t *context, WINECRYPT_CERTSTORE *store, BOOL use_link)
++{
++    ctl_t *ctl;
++
++    if(!use_link) {
++        FIXME("Only links supported\n");
++        return NULL;
++    }
++
++    ctl = (ctl_t*)Context_CreateLinkContext(sizeof(CTL_CONTEXT), context, store);
++    if(!ctl)
++        return NULL;
++
++    ctl->ctx.hCertStore = store;
++    return &ctl->base;
++}
++
++static const context_vtbl_t ctl_vtbl = {
++    CTL_free,
++    CTL_clone
++};
++
+ BOOL WINAPI CertAddCTLContextToStore(HCERTSTORE hCertStore,
+  PCCTL_CONTEXT pCtlContext, DWORD dwAddDisposition,
+  PCCTL_CONTEXT* ppStoreContext)
+@@ -125,11 +157,16 @@
+ 
+     if (toAdd)
+     {
+-        if (store)
+-            ret = store->ctls.addContext(store, (void *)toAdd,
+-             (void *)existing, (const void **)ppStoreContext);
+-        else if (ppStoreContext)
++        if (store) {
++            context_t *ret_ctx;
++
++            ret = store->vtbl->ctls.addContext(store, context_from_ptr(toAdd),
++             existing ? context_from_ptr(existing) : NULL, ppStoreContext ? &ret_ctx : NULL, TRUE);
++            if(ret && ppStoreContext)
++                *ppStoreContext = context_ptr(ret_ctx);
++        }else if (ppStoreContext) {
+             *ppStoreContext = CertDuplicateCTLContext(toAdd);
++        }
+         CertFreeCTLContext(toAdd);
+     }
+     CertFreeCTLContext(existing);
+@@ -161,11 +198,10 @@
+     return ret;
+ }
+ 
+-PCCTL_CONTEXT WINAPI CertEnumCTLsInStore(HCERTSTORE hCertStore,
+- PCCTL_CONTEXT pPrev)
++PCCTL_CONTEXT WINAPI CertEnumCTLsInStore(HCERTSTORE hCertStore, PCCTL_CONTEXT pPrev)
+ {
++    ctl_t *prev = pPrev ? ctl_from_ptr(pPrev) : NULL, *ret;
+     WINECRYPT_CERTSTORE *hcs = hCertStore;
+-    PCCTL_CONTEXT ret;
+ 
+     TRACE("(%p, %p)\n", hCertStore, pPrev);
+     if (!hCertStore)
+@@ -173,8 +209,8 @@
+     else if (hcs->dwMagic != WINE_CRYPTCERTSTORE_MAGIC)
+         ret = NULL;
+     else
+-        ret = (PCCTL_CONTEXT)hcs->ctls.enumContext(hcs, (void *)pPrev);
+-    return ret;
++        ret = (ctl_t*)hcs->vtbl->ctls.enumContext(hcs, prev ? &prev->base : NULL);
++    return ret ? &ret->ctx : NULL;
+ }
+ 
+ typedef BOOL (*CtlCompareFunc)(PCCTL_CONTEXT pCtlContext, DWORD dwType,
+@@ -305,32 +341,28 @@
+ 
+ BOOL WINAPI CertDeleteCTLFromStore(PCCTL_CONTEXT pCtlContext)
+ {
++    WINECRYPT_CERTSTORE *hcs = pCtlContext->hCertStore;
++    ctl_t *ctl = ctl_from_ptr(pCtlContext);
+     BOOL ret;
+ 
+     TRACE("(%p)\n", pCtlContext);
+ 
+     if (!pCtlContext)
+-        ret = TRUE;
+-    else if (!pCtlContext->hCertStore)
+-        ret = CertFreeCTLContext(pCtlContext);
+-    else
+-    {
+-        WINECRYPT_CERTSTORE *hcs = pCtlContext->hCertStore;
++        return TRUE;
+ 
+-        if (hcs->dwMagic != WINE_CRYPTCERTSTORE_MAGIC)
+-            ret = FALSE;
+-        else
+-            ret = hcs->ctls.deleteContext(hcs, (void *)pCtlContext);
+-        if (ret)
+-            ret = CertFreeCTLContext(pCtlContext);
+-    }
++    if (hcs->dwMagic != WINE_CRYPTCERTSTORE_MAGIC)
++            return FALSE;
++
++    ret = hcs->vtbl->ctls.delete(hcs, &ctl->base);
++    if (ret)
++        ret = CertFreeCTLContext(pCtlContext);
+     return ret;
+ }
+ 
+ PCCTL_CONTEXT WINAPI CertCreateCTLContext(DWORD dwMsgAndCertEncodingType,
+  const BYTE *pbCtlEncoded, DWORD cbCtlEncoded)
+ {
+-    PCTL_CONTEXT ctl = NULL;
++    ctl_t *ctl = NULL;
+     HCRYPTMSG msg;
+     BOOL ret;
+     BYTE *content = NULL;
+@@ -403,7 +435,7 @@
+              &ctlInfo, &size);
+             if (ret)
+             {
+-                ctl = Context_CreateDataContext(sizeof(CTL_CONTEXT));
++                ctl = (ctl_t*)Context_CreateDataContext(sizeof(CTL_CONTEXT), &ctl_vtbl, &empty_store);
+                 if (ctl)
+                 {
+                     BYTE *data = CryptMemAlloc(cbCtlEncoded);
+@@ -411,15 +443,15 @@
+                     if (data)
+                     {
+                         memcpy(data, pbCtlEncoded, cbCtlEncoded);
+-                        ctl->dwMsgAndCertEncodingType =
++                        ctl->ctx.dwMsgAndCertEncodingType =
+                          X509_ASN_ENCODING | PKCS_7_ASN_ENCODING;
+-                        ctl->pbCtlEncoded             = data;
+-                        ctl->cbCtlEncoded             = cbCtlEncoded;
+-                        ctl->pCtlInfo                 = ctlInfo;
+-                        ctl->hCertStore               = NULL;
+-                        ctl->hCryptMsg                = msg;
+-                        ctl->pbCtlContext             = content;
+-                        ctl->cbCtlContext             = contentSize;
++                        ctl->ctx.pbCtlEncoded             = data;
++                        ctl->ctx.cbCtlEncoded             = cbCtlEncoded;
++                        ctl->ctx.pCtlInfo                 = ctlInfo;
++                        ctl->ctx.hCertStore               = &empty_store;
++                        ctl->ctx.hCryptMsg                = msg;
++                        ctl->ctx.pbCtlContext             = content;
++                        ctl->ctx.cbCtlContext             = contentSize;
+                     }
+                     else
+                     {
+@@ -444,63 +476,53 @@
+ end:
+     if (!ret)
+     {
+-        CertFreeCTLContext(ctl);
++        if(ctl)
++            Context_Release(&ctl->base);
+         ctl = NULL;
+         LocalFree(ctlInfo);
+         CryptMemFree(content);
+         CryptMsgClose(msg);
++        return NULL;
+     }
+-    return ctl;
++    return &ctl->ctx;
+ }
+ 
+ PCCTL_CONTEXT WINAPI CertDuplicateCTLContext(PCCTL_CONTEXT pCtlContext)
+ {
+     TRACE("(%p)\n", pCtlContext);
+     if (pCtlContext)
+-        Context_AddRef((void *)pCtlContext);
++        Context_AddRef(&ctl_from_ptr(pCtlContext)->base);
+     return pCtlContext;
+ }
+ 
+-static void CTLDataContext_Free(void *context)
+-{
+-    PCTL_CONTEXT ctlContext = context;
+-
+-    CryptMsgClose(ctlContext->hCryptMsg);
+-    CryptMemFree(ctlContext->pbCtlEncoded);
+-    CryptMemFree(ctlContext->pbCtlContext);
+-    LocalFree(ctlContext->pCtlInfo);
+-}
+-
+ BOOL WINAPI CertFreeCTLContext(PCCTL_CONTEXT pCTLContext)
+ {
+-    BOOL ret = TRUE;
+-
+     TRACE("(%p)\n", pCTLContext);
+ 
+     if (pCTLContext)
+-        ret = Context_Release((void *)pCTLContext, CTLDataContext_Free);
+-    return ret;
++        Context_Release(&ctl_from_ptr(pCTLContext)->base);
++    return TRUE;
+ }
+ 
+ DWORD WINAPI CertEnumCTLContextProperties(PCCTL_CONTEXT pCTLContext,
+  DWORD dwPropId)
+ {
+-    CONTEXT_PROPERTY_LIST *properties = Context_GetProperties(pCTLContext);
++    ctl_t *ctl = ctl_from_ptr(pCTLContext);
+     DWORD ret;
+ 
+     TRACE("(%p, %d)\n", pCTLContext, dwPropId);
+ 
+-    if (properties)
+-        ret = ContextPropertyList_EnumPropIDs(properties, dwPropId);
++    if (ctl->base.properties)
++        ret = ContextPropertyList_EnumPropIDs(ctl->base.properties, dwPropId);
+     else
+         ret = 0;
+     return ret;
+ }
+ 
+-static BOOL CTLContext_SetProperty(PCCTL_CONTEXT context, DWORD dwPropId,
++static BOOL CTLContext_SetProperty(ctl_t *ctl, DWORD dwPropId,
+                                    DWORD dwFlags, const void *pvData);
+ 
+-static BOOL CTLContext_GetHashProp(PCCTL_CONTEXT context, DWORD dwPropId,
++static BOOL CTLContext_GetHashProp(ctl_t *ctl, DWORD dwPropId,
+  ALG_ID algID, const BYTE *toHash, DWORD toHashLen, void *pvData,
+  DWORD *pcbData)
+ {
+@@ -510,22 +532,21 @@
+     {
+         CRYPT_DATA_BLOB blob = { *pcbData, pvData };
+ 
+-        ret = CTLContext_SetProperty(context, dwPropId, 0, &blob);
++        ret = CTLContext_SetProperty(ctl, dwPropId, 0, &blob);
+     }
+     return ret;
+ }
+ 
+-static BOOL CTLContext_GetProperty(PCCTL_CONTEXT context, DWORD dwPropId,
++static BOOL CTLContext_GetProperty(ctl_t *ctl, DWORD dwPropId,
+                                    void *pvData, DWORD *pcbData)
+ {
+-    CONTEXT_PROPERTY_LIST *properties = Context_GetProperties(context);
+     BOOL ret;
+     CRYPT_DATA_BLOB blob;
+ 
+-    TRACE("(%p, %d, %p, %p)\n", context, dwPropId, pvData, pcbData);
++    TRACE("(%p, %d, %p, %p)\n", ctl, dwPropId, pvData, pcbData);
+ 
+-    if (properties)
+-        ret = ContextPropertyList_FindProperty(properties, dwPropId, &blob);
++    if (ctl->base.properties)
++        ret = ContextPropertyList_FindProperty(ctl->base.properties, dwPropId, &blob);
+     else
+         ret = FALSE;
+     if (ret)
+@@ -550,12 +571,12 @@
+         switch (dwPropId)
+         {
+         case CERT_SHA1_HASH_PROP_ID:
+-            ret = CTLContext_GetHashProp(context, dwPropId, CALG_SHA1,
+-             context->pbCtlEncoded, context->cbCtlEncoded, pvData, pcbData);
++            ret = CTLContext_GetHashProp(ctl, dwPropId, CALG_SHA1,
++             ctl->ctx.pbCtlEncoded, ctl->ctx.cbCtlEncoded, pvData, pcbData);
+             break;
+         case CERT_MD5_HASH_PROP_ID:
+-            ret = CTLContext_GetHashProp(context, dwPropId, CALG_MD5,
+-             context->pbCtlEncoded, context->cbCtlEncoded, pvData, pcbData);
++            ret = CTLContext_GetHashProp(ctl, dwPropId, CALG_MD5,
++             ctl->ctx.pbCtlEncoded, ctl->ctx.cbCtlEncoded, pvData, pcbData);
+             break;
+         default:
+             SetLastError(CRYPT_E_NOT_FOUND);
+@@ -595,36 +616,28 @@
+         }
+         else
+         {
+-            if (pCTLContext->hCertStore)
+-                ret = CertGetStoreProperty(pCTLContext->hCertStore, dwPropId,
+-                 pvData, pcbData);
+-            else
+-            {
+-                *(DWORD *)pvData = 0;
+-                ret = TRUE;
+-            }
++            ret = CertGetStoreProperty(pCTLContext->hCertStore, dwPropId, pvData, pcbData);
+         }
+         break;
+     default:
+-        ret = CTLContext_GetProperty(pCTLContext, dwPropId, pvData,
++        ret = CTLContext_GetProperty(ctl_from_ptr(pCTLContext), dwPropId, pvData,
+          pcbData);
+     }
+     return ret;
+ }
+ 
+-static BOOL CTLContext_SetProperty(PCCTL_CONTEXT context, DWORD dwPropId,
++static BOOL CTLContext_SetProperty(ctl_t *ctl, DWORD dwPropId,
+  DWORD dwFlags, const void *pvData)
+ {
+-    CONTEXT_PROPERTY_LIST *properties = Context_GetProperties(context);
+     BOOL ret;
+ 
+-    TRACE("(%p, %d, %08x, %p)\n", context, dwPropId, dwFlags, pvData);
++    TRACE("(%p, %d, %08x, %p)\n", ctl, dwPropId, dwFlags, pvData);
+ 
+-    if (!properties)
++    if (!ctl->base.properties)
+         ret = FALSE;
+     else if (!pvData)
+     {
+-        ContextPropertyList_RemoveProperty(properties, dwPropId);
++        ContextPropertyList_RemoveProperty(ctl->base.properties, dwPropId);
+         ret = TRUE;
+     }
+     else
+@@ -651,12 +664,12 @@
+         {
+             PCRYPT_DATA_BLOB blob = (PCRYPT_DATA_BLOB)pvData;
+ 
+-            ret = ContextPropertyList_SetProperty(properties, dwPropId,
++            ret = ContextPropertyList_SetProperty(ctl->base.properties, dwPropId,
+              blob->pbData, blob->cbData);
+             break;
+         }
+         case CERT_DATE_STAMP_PROP_ID:
+-            ret = ContextPropertyList_SetProperty(properties, dwPropId,
++            ret = ContextPropertyList_SetProperty(ctl->base.properties, dwPropId,
+              pvData, sizeof(FILETIME));
+             break;
+         default:
+@@ -688,7 +701,7 @@
+         SetLastError(E_INVALIDARG);
+         return FALSE;
+     }
+-    ret = CTLContext_SetProperty(pCTLContext, dwPropId, dwFlags, pvData);
++    ret = CTLContext_SetProperty(ctl_from_ptr(pCTLContext), dwPropId, dwFlags, pvData);
+     TRACE("returning %d\n", ret);
+     return ret;
+ }
+diff -Naur a/dlls/crypt32/main.c b/dlls/crypt32/main.c
+--- a/dlls/crypt32/main.c	2013-10-11 17:21:06.000000000 +0000
++++ b/dlls/crypt32/main.c	2013-10-25 17:45:30.000000000 +0000
+@@ -42,6 +42,7 @@
+         case DLL_PROCESS_ATTACH:
+             hInstance = hInst;
+             DisableThreadLibraryCalls(hInst);
++            init_empty_store();
+             crypt_oid_init();
+             break;
+         case DLL_PROCESS_DETACH:
+diff -Naur a/dlls/crypt32/object.c b/dlls/crypt32/object.c
+--- a/dlls/crypt32/object.c	2013-10-11 17:21:06.000000000 +0000
++++ b/dlls/crypt32/object.c	2013-10-25 17:45:30.000000000 +0000
+@@ -271,12 +271,15 @@
+             *phCertStore = CertDuplicateStore(
+              *(HCERTSTORE *)((const BYTE *)context + certStoreOffset));
+         if (ppvContext)
+-            *ppvContext = contextInterface->duplicate(context);
++        {
++            *ppvContext = context;
++            Context_AddRef(context_from_ptr(context));
++        }
+     }
+ 
+ end:
+     if (contextInterface && context)
+-        contextInterface->free(context);
++        Context_Release(context_from_ptr(context));
+     if (blob == &fileBlob)
+         CryptMemFree(blob->pbData);
+     TRACE("returning %d\n", ret);
+diff -Naur a/dlls/crypt32/provstore.c b/dlls/crypt32/provstore.c
+--- a/dlls/crypt32/provstore.c	2013-10-11 17:21:06.000000000 +0000
++++ b/dlls/crypt32/provstore.c	2013-10-25 17:45:30.000000000 +0000
+@@ -15,12 +15,14 @@
+  * License along with this library; if not, write to the Free Software
+  * Foundation, Inc., 51 Franklin St, Fifth Floor, Boston, MA 02110-1301, USA
+  */
++
+ #include <stdarg.h>
++#include <assert.h>
++
+ #include "windef.h"
+ #include "winbase.h"
+ #include "wincrypt.h"
+ #include "wine/debug.h"
+-#include "wine/list.h"
+ #include "crypt32_private.h"
+ 
+ WINE_DEFAULT_DEBUG_CHANNEL(crypt);
+@@ -41,21 +43,43 @@
+     PFN_CERT_STORE_PROV_CONTROL     provControl;
+ } WINE_PROVIDERSTORE;
+ 
+-static void ProvStore_closeStore(WINECRYPT_CERTSTORE *cert_store, DWORD dwFlags)
++static void ProvStore_addref(WINECRYPT_CERTSTORE *store)
++{
++    LONG ref = InterlockedIncrement(&store->ref);
++    TRACE("ref = %d\n", ref);
++}
++
++static DWORD ProvStore_release(WINECRYPT_CERTSTORE *cert_store, DWORD flags)
+ {
+     WINE_PROVIDERSTORE *store = (WINE_PROVIDERSTORE*)cert_store;
++    LONG ref;
+ 
+-    TRACE("(%p, %08x)\n", store, dwFlags);
++    if(flags)
++        FIXME("Unimplemented flags %x\n", flags);
++
++    ref = InterlockedDecrement(&store->hdr.ref);
++    TRACE("(%p) ref=%d\n", store, ref);
++
++    if(ref)
++        return ERROR_SUCCESS;
+ 
+     if (store->provCloseStore)
+-        store->provCloseStore(store->hStoreProv, dwFlags);
++        store->provCloseStore(store->hStoreProv, flags);
+     if (!(store->dwStoreProvFlags & CERT_STORE_PROV_EXTERNAL_FLAG))
+-        CertCloseStore(store->memStore, dwFlags);
+-    CRYPT_FreeStore((WINECRYPT_CERTSTORE*)store);
++        store->memStore->vtbl->release(store->memStore, flags);
++    CRYPT_FreeStore(&store->hdr);
++    return ERROR_SUCCESS;
+ }
+ 
+-static BOOL CRYPT_ProvAddCert(WINECRYPT_CERTSTORE *store, void *cert,
+- void *toReplace, const void **ppStoreContext)
++static void ProvStore_releaseContext(WINECRYPT_CERTSTORE *store, context_t *context)
++{
++    /* As long as we don't have contexts properly stored (and hack around hCertStore
++       in add* and enum* functions), this function should never be called. */
++    assert(0);
++}
++
++static BOOL ProvStore_addCert(WINECRYPT_CERTSTORE *store, context_t *cert,
++ context_t *toReplace, context_t **ppStoreContext, BOOL use_link)
+ {
+     WINE_PROVIDERSTORE *ps = (WINE_PROVIDERSTORE*)store;
+     BOOL ret;
+@@ -63,58 +87,57 @@
+     TRACE("(%p, %p, %p, %p)\n", store, cert, toReplace, ppStoreContext);
+ 
+     if (toReplace)
+-        ret = ps->memStore->certs.addContext(ps->memStore, cert, toReplace,
+-         ppStoreContext);
++        ret = ps->memStore->vtbl->certs.addContext(ps->memStore, cert, toReplace,
++         ppStoreContext, TRUE);
+     else
+     {
+         ret = TRUE;
+         if (ps->provWriteCert)
+-            ret = ps->provWriteCert(ps->hStoreProv, cert,
+-             CERT_STORE_PROV_WRITE_ADD_FLAG);
++            ret = ps->provWriteCert(ps->hStoreProv, context_ptr(cert), CERT_STORE_PROV_WRITE_ADD_FLAG);
+         if (ret)
+-            ret = ps->memStore->certs.addContext(ps->memStore, cert, NULL,
+-             ppStoreContext);
++            ret = ps->memStore->vtbl->certs.addContext(ps->memStore, cert, NULL,
++             ppStoreContext, TRUE);
+     }
+     /* dirty trick: replace the returned context's hCertStore with
+      * store.
+      */
+     if (ret && ppStoreContext)
+-        (*(PCERT_CONTEXT *)ppStoreContext)->hCertStore = store;
++        (*(cert_t**)ppStoreContext)->ctx.hCertStore = store;
+     return ret;
+ }
+ 
+-static void *CRYPT_ProvEnumCert(WINECRYPT_CERTSTORE *store, void *pPrev)
++static context_t *ProvStore_enumCert(WINECRYPT_CERTSTORE *store, context_t *prev)
+ {
+     WINE_PROVIDERSTORE *ps = (WINE_PROVIDERSTORE*)store;
+-    void *ret;
++    cert_t *ret;
+ 
+-    ret = ps->memStore->certs.enumContext(ps->memStore, pPrev);
+-    if (ret)
+-    {
+-        /* same dirty trick: replace the returned context's hCertStore with
+-         * store.
+-         */
+-        ((PCERT_CONTEXT)ret)->hCertStore = store;
+-    }
+-    return ret;
++    ret = (cert_t*)ps->memStore->vtbl->certs.enumContext(ps->memStore, prev);
++    if (!ret)
++        return NULL;
++
++    /* same dirty trick: replace the returned context's hCertStore with
++     * store.
++     */
++    ret->ctx.hCertStore = store;
++    return &ret->base;
+ }
+ 
+-static BOOL CRYPT_ProvDeleteCert(WINECRYPT_CERTSTORE *store, void *cert)
++static BOOL ProvStore_deleteCert(WINECRYPT_CERTSTORE *store, context_t *context)
+ {
+     WINE_PROVIDERSTORE *ps = (WINE_PROVIDERSTORE*)store;
+     BOOL ret = TRUE;
+ 
+-    TRACE("(%p, %p)\n", store, cert);
++    TRACE("(%p, %p)\n", store, context);
+ 
+     if (ps->provDeleteCert)
+-        ret = ps->provDeleteCert(ps->hStoreProv, cert, 0);
++        ret = ps->provDeleteCert(ps->hStoreProv, context_ptr(context), 0);
+     if (ret)
+-        ret = ps->memStore->certs.deleteContext(ps->memStore, cert);
++        ret = ps->memStore->vtbl->certs.delete(ps->memStore, context);
+     return ret;
+ }
+ 
+-static BOOL CRYPT_ProvAddCRL(WINECRYPT_CERTSTORE *store, void *crl,
+- void *toReplace, const void **ppStoreContext)
++static BOOL ProvStore_addCRL(WINECRYPT_CERTSTORE *store, context_t *crl,
++ context_t *toReplace, context_t **ppStoreContext, BOOL use_link)
+ {
+     WINE_PROVIDERSTORE *ps = (WINE_PROVIDERSTORE*)store;
+     BOOL ret;
+@@ -122,8 +145,8 @@
+     TRACE("(%p, %p, %p, %p)\n", store, crl, toReplace, ppStoreContext);
+ 
+     if (toReplace)
+-        ret = ps->memStore->crls.addContext(ps->memStore, crl, toReplace,
+-         ppStoreContext);
++        ret = ps->memStore->vtbl->crls.addContext(ps->memStore, crl, toReplace,
++         ppStoreContext, TRUE);
+     else
+     {
+         if (ps->hdr.dwOpenFlags & CERT_STORE_READONLY_FLAG)
+@@ -135,38 +158,38 @@
+         {
+             ret = TRUE;
+             if (ps->provWriteCrl)
+-                ret = ps->provWriteCrl(ps->hStoreProv, crl,
++                ret = ps->provWriteCrl(ps->hStoreProv, context_ptr(crl),
+                  CERT_STORE_PROV_WRITE_ADD_FLAG);
+             if (ret)
+-                ret = ps->memStore->crls.addContext(ps->memStore, crl, NULL,
+-                 ppStoreContext);
++                ret = ps->memStore->vtbl->crls.addContext(ps->memStore, crl, NULL,
++                 ppStoreContext, TRUE);
+         }
+     }
+     /* dirty trick: replace the returned context's hCertStore with
+      * store.
+      */
+     if (ret && ppStoreContext)
+-        (*(PCRL_CONTEXT *)ppStoreContext)->hCertStore = store;
++        (*(crl_t**)ppStoreContext)->ctx.hCertStore = store;
+     return ret;
+ }
+ 
+-static void *CRYPT_ProvEnumCRL(WINECRYPT_CERTSTORE *store, void *pPrev)
++static context_t *ProvStore_enumCRL(WINECRYPT_CERTSTORE *store, context_t *prev)
+ {
+     WINE_PROVIDERSTORE *ps = (WINE_PROVIDERSTORE*)store;
+-    void *ret;
++    crl_t *ret;
+ 
+-    ret = ps->memStore->crls.enumContext(ps->memStore, pPrev);
+-    if (ret)
+-    {
+-        /* same dirty trick: replace the returned context's hCertStore with
+-         * store.
+-         */
+-        ((PCRL_CONTEXT)ret)->hCertStore = store;
+-    }
+-    return ret;
++    ret = (crl_t*)ps->memStore->vtbl->crls.enumContext(ps->memStore, prev);
++    if (!ret)
++        return NULL;
++
++    /* same dirty trick: replace the returned context's hCertStore with
++     * store.
++     */
++    ret->ctx.hCertStore = store;
++    return &ret->base;
+ }
+ 
+-static BOOL CRYPT_ProvDeleteCRL(WINECRYPT_CERTSTORE *store, void *crl)
++static BOOL ProvStore_deleteCRL(WINECRYPT_CERTSTORE *store, context_t *crl)
+ {
+     WINE_PROVIDERSTORE *ps = (WINE_PROVIDERSTORE*)store;
+     BOOL ret = TRUE;
+@@ -174,14 +197,14 @@
+     TRACE("(%p, %p)\n", store, crl);
+ 
+     if (ps->provDeleteCrl)
+-        ret = ps->provDeleteCrl(ps->hStoreProv, crl, 0);
++        ret = ps->provDeleteCrl(ps->hStoreProv, context_ptr(crl), 0);
+     if (ret)
+-        ret = ps->memStore->crls.deleteContext(ps->memStore, crl);
++        ret = ps->memStore->vtbl->crls.delete(ps->memStore, crl);
+     return ret;
+ }
+ 
+-static BOOL CRYPT_ProvAddCTL(WINECRYPT_CERTSTORE *store, void *ctl,
+- void *toReplace, const void **ppStoreContext)
++static BOOL ProvStore_addCTL(WINECRYPT_CERTSTORE *store, context_t *ctl,
++ context_t *toReplace, context_t **ppStoreContext, BOOL use_link)
+ {
+     WINE_PROVIDERSTORE *ps = (WINE_PROVIDERSTORE*)store;
+     BOOL ret;
+@@ -189,8 +212,8 @@
+     TRACE("(%p, %p, %p, %p)\n", store, ctl, toReplace, ppStoreContext);
+ 
+     if (toReplace)
+-        ret = ps->memStore->ctls.addContext(ps->memStore, ctl, toReplace,
+-         ppStoreContext);
++        ret = ps->memStore->vtbl->ctls.addContext(ps->memStore, ctl, toReplace,
++         ppStoreContext, TRUE);
+     else
+     {
+         if (ps->hdr.dwOpenFlags & CERT_STORE_READONLY_FLAG)
+@@ -202,38 +225,38 @@
+         {
+             ret = TRUE;
+             if (ps->provWriteCtl)
+-                ret = ps->provWriteCtl(ps->hStoreProv, ctl,
++                ret = ps->provWriteCtl(ps->hStoreProv, context_ptr(ctl),
+                  CERT_STORE_PROV_WRITE_ADD_FLAG);
+             if (ret)
+-                ret = ps->memStore->ctls.addContext(ps->memStore, ctl, NULL,
+-                 ppStoreContext);
++                ret = ps->memStore->vtbl->ctls.addContext(ps->memStore, ctl, NULL,
++                 ppStoreContext, TRUE);
+         }
+     }
+     /* dirty trick: replace the returned context's hCertStore with
+      * store.
+      */
+     if (ret && ppStoreContext)
+-        (*(PCTL_CONTEXT *)ppStoreContext)->hCertStore = store;
++        (*(ctl_t**)ppStoreContext)->ctx.hCertStore = store;
+     return ret;
+ }
+ 
+-static void *CRYPT_ProvEnumCTL(WINECRYPT_CERTSTORE *store, void *pPrev)
++static context_t *ProvStore_enumCTL(WINECRYPT_CERTSTORE *store, context_t *prev)
+ {
+     WINE_PROVIDERSTORE *ps = (WINE_PROVIDERSTORE*)store;
+-    void *ret;
++    ctl_t *ret;
+ 
+-    ret = ps->memStore->ctls.enumContext(ps->memStore, pPrev);
+-    if (ret)
+-    {
+-        /* same dirty trick: replace the returned context's hCertStore with
+-         * store.
+-         */
+-        ((PCTL_CONTEXT)ret)->hCertStore = store;
+-    }
+-    return ret;
++    ret = (ctl_t*)ps->memStore->vtbl->ctls.enumContext(ps->memStore, prev);
++    if (!ret)
++        return NULL;
++
++    /* same dirty trick: replace the returned context's hCertStore with
++     * store.
++     */
++    ret->ctx.hCertStore = store;
++    return &ret->base;
+ }
+ 
+-static BOOL CRYPT_ProvDeleteCTL(WINECRYPT_CERTSTORE *store, void *ctl)
++static BOOL ProvStore_deleteCTL(WINECRYPT_CERTSTORE *store, context_t *ctl)
+ {
+     WINE_PROVIDERSTORE *ps = (WINE_PROVIDERSTORE*)store;
+     BOOL ret = TRUE;
+@@ -241,9 +264,9 @@
+     TRACE("(%p, %p)\n", store, ctl);
+ 
+     if (ps->provDeleteCtl)
+-        ret = ps->provDeleteCtl(ps->hStoreProv, ctl, 0);
++        ret = ps->provDeleteCtl(ps->hStoreProv, context_ptr(ctl), 0);
+     if (ret)
+-        ret = ps->memStore->ctls.deleteContext(ps->memStore, ctl);
++        ret = ps->memStore->vtbl->ctls.delete(ps->memStore, ctl);
+     return ret;
+ }
+ 
+@@ -262,8 +285,23 @@
+ }
+ 
+ static const store_vtbl_t ProvStoreVtbl = {
+-    ProvStore_closeStore,
+-    ProvStore_control
++    ProvStore_addref,
++    ProvStore_release,
++    ProvStore_releaseContext,
++    ProvStore_control,
++    {
++        ProvStore_addCert,
++        ProvStore_enumCert,
++        ProvStore_deleteCert
++    }, {
++        ProvStore_addCRL,
++        ProvStore_enumCRL,
++        ProvStore_deleteCRL
++    }, {
++        ProvStore_addCTL,
++        ProvStore_enumCTL,
++        ProvStore_deleteCTL
++    }
+ };
+ 
+ WINECRYPT_CERTSTORE *CRYPT_ProvCreateStore(DWORD dwFlags,
+@@ -283,15 +321,6 @@
+         else
+             ret->memStore = memStore;
+         ret->hStoreProv = pProvInfo->hStoreProv;
+-        ret->hdr.certs.addContext = CRYPT_ProvAddCert;
+-        ret->hdr.certs.enumContext = CRYPT_ProvEnumCert;
+-        ret->hdr.certs.deleteContext = CRYPT_ProvDeleteCert;
+-        ret->hdr.crls.addContext = CRYPT_ProvAddCRL;
+-        ret->hdr.crls.enumContext = CRYPT_ProvEnumCRL;
+-        ret->hdr.crls.deleteContext = CRYPT_ProvDeleteCRL;
+-        ret->hdr.ctls.addContext = CRYPT_ProvAddCTL;
+-        ret->hdr.ctls.enumContext = CRYPT_ProvEnumCTL;
+-        ret->hdr.ctls.deleteContext = CRYPT_ProvDeleteCTL;
+         if (pProvInfo->cStoreProvFunc > CERT_STORE_PROV_CLOSE_FUNC)
+             ret->provCloseStore =
+              pProvInfo->rgpvStoreProvFunc[CERT_STORE_PROV_CLOSE_FUNC];
+diff -Naur a/dlls/crypt32/regstore.c b/dlls/crypt32/regstore.c
+--- a/dlls/crypt32/regstore.c	2013-10-11 17:21:06.000000000 +0000
++++ b/dlls/crypt32/regstore.c	2013-10-25 17:45:30.000000000 +0000
+@@ -23,7 +23,6 @@
+ #include "winreg.h"
+ #include "winuser.h"
+ #include "wine/debug.h"
+-#include "wine/list.h"
+ #include "crypt32_private.h"
+ 
+ WINE_DEFAULT_DEBUG_CHANNEL(crypt);
+@@ -143,7 +142,7 @@
+                                     else
+                                         TRACE("hash doesn't match, ignoring\n");
+                                 }
+-                                contextInterface->free(context);
++                                Context_Release(context_from_ptr(context));
+                             }
+                         }
+                     }
+@@ -242,7 +241,7 @@
+             ret = TRUE;
+     } while (ret && context != NULL);
+     if (context)
+-        contextInterface->free(context);
++        Context_Release(context_from_ptr(context));
+     return ret;
+ }
+ 
+diff -Naur a/dlls/crypt32/rootstore.c b/dlls/crypt32/rootstore.c
+--- a/dlls/crypt32/rootstore.c	2013-10-11 17:21:06.000000000 +0000
++++ b/dlls/crypt32/rootstore.c	2013-10-25 17:45:30.000000000 +0000
+@@ -486,6 +486,7 @@
+  "/etc/ssl/certs/ca-certificates.crt",
+  "/etc/ssl/certs",
+  "/etc/pki/tls/certs/ca-bundle.crt",
++ "/usr/share/ca-certificates/ca-bundle.crt",
+  "/usr/local/share/certs/",
+  "/etc/sfw/openssl/certs",
+ };
+@@ -832,7 +833,7 @@
+         if (CRYPT_rootStore != root)
+             CertCloseStore(root, 0);
+     }
+-    CertDuplicateStore(CRYPT_rootStore);
++    CRYPT_rootStore->vtbl->addref(CRYPT_rootStore);
+     return CRYPT_rootStore;
+ }
+ 
+diff -Naur a/dlls/crypt32/serialize.c b/dlls/crypt32/serialize.c
+--- a/dlls/crypt32/serialize.c	2013-10-11 17:21:06.000000000 +0000
++++ b/dlls/crypt32/serialize.c	2013-10-25 17:45:30.000000000 +0000
+@@ -409,7 +409,7 @@
+             }
+             else
+             {
+-                contextInterface->free(context);
++                Context_Release(context_from_ptr(context));
+                 context = NULL;
+             }
+         }
+@@ -461,7 +461,7 @@
+                      propHdr.propID == CERT_CTL_PROP_ID))
+                     {
+                         /* We have a new context, so free the existing one */
+-                        contextInterface->free(context);
++                        Context_Release(context_from_ptr(context));
+                     }
+                     if (propHdr.cb > bufSize)
+                     {
+@@ -522,7 +522,7 @@
+             if (contextInterface && context)
+             {
+                 /* Free the last context added */
+-                contextInterface->free(context);
++                Context_Release(context_from_ptr(context));
+             }
+             CryptMemFree(buf);
+             ret = TRUE;
+@@ -638,7 +638,7 @@
+             ret = TRUE;
+     } while (ret && context != NULL);
+     if (context)
+-        contextInterface->free(context);
++        Context_Release(context_from_ptr(context));
+     return ret;
+ }
+ 
+@@ -996,7 +996,7 @@
+                 *pdwContentType = type;
+             ret = contextInterface->addContextToStore(hCertStore, context,
+              dwAddDisposition, ppvContext);
+-            contextInterface->free(context);
++            Context_Release(context_from_ptr(context));
+         }
+         else
+             ret = FALSE;
+diff -Naur a/dlls/crypt32/store.c b/dlls/crypt32/store.c
+--- a/dlls/crypt32/store.c	2013-10-11 17:21:06.000000000 +0000
++++ b/dlls/crypt32/store.c	2013-10-25 17:45:30.000000000 +0000
+@@ -35,7 +35,6 @@
+ #include "winuser.h"
+ #include "wincrypt.h"
+ #include "wine/debug.h"
+-#include "wine/list.h"
+ #include "wine/exception.h"
+ #include "crypt32_private.h"
+ 
+@@ -45,13 +44,11 @@
+     (CreateContextFunc)CertCreateCertificateContext,
+     (AddContextToStoreFunc)CertAddCertificateContextToStore,
+     (AddEncodedContextToStoreFunc)CertAddEncodedCertificateToStore,
+-    (DuplicateContextFunc)CertDuplicateCertificateContext,
+     (EnumContextsInStoreFunc)CertEnumCertificatesInStore,
+     (EnumPropertiesFunc)CertEnumCertificateContextProperties,
+     (GetContextPropertyFunc)CertGetCertificateContextProperty,
+     (SetContextPropertyFunc)CertSetCertificateContextProperty,
+     (SerializeElementFunc)CertSerializeCertificateStoreElement,
+-    (FreeContextFunc)CertFreeCertificateContext,
+     (DeleteContextFunc)CertDeleteCertificateFromStore,
+ };
+ const WINE_CONTEXT_INTERFACE *pCertInterface = &gCertInterface;
+@@ -60,13 +57,11 @@
+     (CreateContextFunc)CertCreateCRLContext,
+     (AddContextToStoreFunc)CertAddCRLContextToStore,
+     (AddEncodedContextToStoreFunc)CertAddEncodedCRLToStore,
+-    (DuplicateContextFunc)CertDuplicateCRLContext,
+     (EnumContextsInStoreFunc)CertEnumCRLsInStore,
+     (EnumPropertiesFunc)CertEnumCRLContextProperties,
+     (GetContextPropertyFunc)CertGetCRLContextProperty,
+     (SetContextPropertyFunc)CertSetCRLContextProperty,
+     (SerializeElementFunc)CertSerializeCRLStoreElement,
+-    (FreeContextFunc)CertFreeCRLContext,
+     (DeleteContextFunc)CertDeleteCRLFromStore,
+ };
+ const WINE_CONTEXT_INTERFACE *pCRLInterface = &gCRLInterface;
+@@ -75,13 +70,11 @@
+     (CreateContextFunc)CertCreateCTLContext,
+     (AddContextToStoreFunc)CertAddCTLContextToStore,
+     (AddEncodedContextToStoreFunc)CertAddEncodedCTLToStore,
+-    (DuplicateContextFunc)CertDuplicateCTLContext,
+     (EnumContextsInStoreFunc)CertEnumCTLsInStore,
+     (EnumPropertiesFunc)CertEnumCTLContextProperties,
+     (GetContextPropertyFunc)CertGetCTLContextProperty,
+     (SetContextPropertyFunc)CertSetCTLContextProperty,
+     (SerializeElementFunc)CertSerializeCTLStoreElement,
+-    (FreeContextFunc)CertFreeCTLContext,
+     (DeleteContextFunc)CertDeleteCTLFromStore,
+ };
+ const WINE_CONTEXT_INTERFACE *pCTLInterface = &gCTLInterface;
+@@ -89,9 +82,10 @@
+ typedef struct _WINE_MEMSTORE
+ {
+     WINECRYPT_CERTSTORE hdr;
+-    struct ContextList *certs;
+-    struct ContextList *crls;
+-    struct ContextList *ctls;
++    CRITICAL_SECTION cs;
++    struct list certs;
++    struct list crls;
++    struct list ctls;
+ } WINE_MEMSTORE;
+ 
+ void CRYPT_InitStore(WINECRYPT_CERTSTORE *store, DWORD dwFlags, CertStoreType type, const store_vtbl_t *vtbl)
+@@ -108,6 +102,7 @@
+ {
+     if (store->properties)
+         ContextPropertyList_Free(store->properties);
++    store->dwMagic = 0;
+     CryptMemFree(store);
+ }
+ 
+@@ -148,154 +143,206 @@
+     return TRUE;
+ }
+ 
+-static BOOL CRYPT_MemAddCert(WINECRYPT_CERTSTORE *store, void *cert,
+- void *toReplace, const void **ppStoreContext)
++static BOOL MemStore_addContext(WINE_MEMSTORE *store, struct list *list, context_t *orig_context,
++ context_t *existing, context_t **ret_context, BOOL use_link)
+ {
+-    WINE_MEMSTORE *ms = (WINE_MEMSTORE *)store;
+-    PCERT_CONTEXT context;
++    context_t *context;
+ 
+-    TRACE("(%p, %p, %p, %p)\n", store, cert, toReplace, ppStoreContext);
++    context = orig_context->vtbl->clone(orig_context, &store->hdr, use_link);
++    if (!context)
++        return FALSE;
+ 
+-    context = ContextList_Add(ms->certs, cert, toReplace);
+-    if (context)
+-    {
+-        context->hCertStore = store;
+-        if (ppStoreContext) {
+-            *ppStoreContext = CertDuplicateCertificateContext(context);
+-        }
++    TRACE("adding %p\n", context);
++    EnterCriticalSection(&store->cs);
++    if (existing) {
++        context->u.entry.prev = existing->u.entry.prev;
++        context->u.entry.next = existing->u.entry.next;
++        context->u.entry.prev->next = &context->u.entry;
++        context->u.entry.next->prev = &context->u.entry;
++        list_init(&existing->u.entry);
++        if(!existing->ref)
++            Context_Release(existing);
++    }else {
++        list_add_head(list, &context->u.entry);
+     }
+-    return context != 0;
++    LeaveCriticalSection(&store->cs);
++
++    if(ret_context)
++        *ret_context = context;
++    else
++        Context_Release(context);
++    return TRUE;
+ }
+ 
+-static void *CRYPT_MemEnumCert(WINECRYPT_CERTSTORE *store, void *pPrev)
++static context_t *MemStore_enumContext(WINE_MEMSTORE *store, struct list *list, context_t *prev)
+ {
+-    WINE_MEMSTORE *ms = (WINE_MEMSTORE *)store;
+-    void *ret;
++    struct list *next;
++    context_t *ret;
+ 
+-    TRACE("(%p, %p)\n", store, pPrev);
++    EnterCriticalSection(&store->cs);
++    if (prev) {
++        next = list_next(list, &prev->u.entry);
++        Context_Release(prev);
++    }else {
++        next = list_next(list, list);
++    }
++    LeaveCriticalSection(&store->cs);
+ 
+-    ret = ContextList_Enum(ms->certs, pPrev);
+-    if (!ret)
++    if (!next) {
+         SetLastError(CRYPT_E_NOT_FOUND);
++        return NULL;
++    }
+ 
+-    TRACE("returning %p\n", ret);
++    ret = LIST_ENTRY(next, context_t, u.entry);
++    Context_AddRef(ret);
+     return ret;
+ }
+ 
+-static BOOL CRYPT_MemDeleteCert(WINECRYPT_CERTSTORE *store, void *pCertContext)
++static BOOL MemStore_deleteContext(WINE_MEMSTORE *store, context_t *context)
++{
++    BOOL in_list = FALSE;
++
++    EnterCriticalSection(&store->cs);
++    if (!list_empty(&context->u.entry)) {
++        list_remove(&context->u.entry);
++        list_init(&context->u.entry);
++        in_list = TRUE;
++    }
++    LeaveCriticalSection(&store->cs);
++
++    if(in_list && !context->ref)
++        Context_Free(context);
++    return TRUE;
++}
++
++static void free_contexts(struct list *list)
++{
++    context_t *context, *next;
++
++    LIST_FOR_EACH_ENTRY_SAFE(context, next, list, context_t, u.entry)
++    {
++        TRACE("freeing %p\n", context);
++        list_remove(&context->u.entry);
++        Context_Free(context);
++    }
++}
++
++static void MemStore_releaseContext(WINECRYPT_CERTSTORE *store, context_t *context)
++{
++    /* Free the context only if it's not in a list. Otherwise it may be reused later. */
++    if(list_empty(&context->u.entry))
++        Context_Free(context);
++}
++
++static BOOL MemStore_addCert(WINECRYPT_CERTSTORE *store, context_t *cert,
++ context_t *toReplace, context_t **ppStoreContext, BOOL use_link)
+ {
+     WINE_MEMSTORE *ms = (WINE_MEMSTORE *)store;
+-    BOOL ret;
+ 
+-    if (ContextList_Remove(ms->certs, pCertContext))
+-        ret = CertFreeCertificateContext(pCertContext);
+-    else
+-        ret = TRUE;
+-    return ret;
++    TRACE("(%p, %p, %p, %p)\n", store, cert, toReplace, ppStoreContext);
++    return MemStore_addContext(ms, &ms->certs, cert, toReplace, ppStoreContext, use_link);
+ }
+ 
+-static BOOL CRYPT_MemAddCrl(WINECRYPT_CERTSTORE *store, void *crl,
+- void *toReplace, const void **ppStoreContext)
++static context_t *MemStore_enumCert(WINECRYPT_CERTSTORE *store, context_t *prev)
+ {
+     WINE_MEMSTORE *ms = (WINE_MEMSTORE *)store;
+-    PCRL_CONTEXT context;
+ 
+-    TRACE("(%p, %p, %p, %p)\n", store, crl, toReplace, ppStoreContext);
++    TRACE("(%p, %p)\n", store, prev);
+ 
+-    context = ContextList_Add(ms->crls, crl, toReplace);
+-    if (context)
+-    {
+-        context->hCertStore = store;
+-        if (ppStoreContext)
+-            *ppStoreContext = CertDuplicateCRLContext(context);
+-    }
+-    return context != 0;
++    return MemStore_enumContext(ms, &ms->certs, prev);
+ }
+ 
+-static void *CRYPT_MemEnumCrl(WINECRYPT_CERTSTORE *store, void *pPrev)
++static BOOL MemStore_deleteCert(WINECRYPT_CERTSTORE *store, context_t *context)
+ {
+     WINE_MEMSTORE *ms = (WINE_MEMSTORE *)store;
+-    void *ret;
+ 
+-    TRACE("(%p, %p)\n", store, pPrev);
++    TRACE("(%p, %p)\n", store, context);
+ 
+-    ret = ContextList_Enum(ms->crls, pPrev);
+-    if (!ret)
+-        SetLastError(CRYPT_E_NOT_FOUND);
++    return MemStore_deleteContext(ms, context);
++}
+ 
+-    TRACE("returning %p\n", ret);
+-    return ret;
++static BOOL MemStore_addCRL(WINECRYPT_CERTSTORE *store, context_t *crl,
++ context_t *toReplace, context_t **ppStoreContext, BOOL use_link)
++{
++    WINE_MEMSTORE *ms = (WINE_MEMSTORE *)store;
++
++    TRACE("(%p, %p, %p, %p)\n", store, crl, toReplace, ppStoreContext);
++
++    return MemStore_addContext(ms, &ms->crls, crl, toReplace, ppStoreContext, use_link);
+ }
+ 
+-static BOOL CRYPT_MemDeleteCrl(WINECRYPT_CERTSTORE *store, void *pCrlContext)
++static context_t *MemStore_enumCRL(WINECRYPT_CERTSTORE *store, context_t *prev)
+ {
+     WINE_MEMSTORE *ms = (WINE_MEMSTORE *)store;
+-    BOOL ret;
+ 
+-    if (ContextList_Remove(ms->crls, pCrlContext))
+-        ret = CertFreeCRLContext(pCrlContext);
+-    else
+-        ret = TRUE;
+-    return ret;
++    TRACE("(%p, %p)\n", store, prev);
++
++    return MemStore_enumContext(ms, &ms->crls, prev);
+ }
+ 
+-static BOOL CRYPT_MemAddCtl(WINECRYPT_CERTSTORE *store, void *ctl,
+- void *toReplace, const void **ppStoreContext)
++static BOOL MemStore_deleteCRL(WINECRYPT_CERTSTORE *store, context_t *context)
+ {
+     WINE_MEMSTORE *ms = (WINE_MEMSTORE *)store;
+-    PCTL_CONTEXT context;
+ 
+-    TRACE("(%p, %p, %p, %p)\n", store, ctl, toReplace, ppStoreContext);
++    TRACE("(%p, %p)\n", store, context);
+ 
+-    context = ContextList_Add(ms->ctls, ctl, toReplace);
+-    if (context)
+-    {
+-        context->hCertStore = store;
+-        if (ppStoreContext)
+-            *ppStoreContext = CertDuplicateCTLContext(context);
+-    }
+-    return context != 0;
++    return MemStore_deleteContext(ms, context);
+ }
+ 
+-static void *CRYPT_MemEnumCtl(WINECRYPT_CERTSTORE *store, void *pPrev)
++static BOOL MemStore_addCTL(WINECRYPT_CERTSTORE *store, context_t *ctl,
++ context_t *toReplace, context_t **ppStoreContext, BOOL use_link)
+ {
+     WINE_MEMSTORE *ms = (WINE_MEMSTORE *)store;
+-    void *ret;
+ 
+-    TRACE("(%p, %p)\n", store, pPrev);
++    TRACE("(%p, %p, %p, %p)\n", store, ctl, toReplace, ppStoreContext);
+ 
+-    ret = ContextList_Enum(ms->ctls, pPrev);
+-    if (!ret)
+-        SetLastError(CRYPT_E_NOT_FOUND);
++    return MemStore_addContext(ms, &ms->ctls, ctl, toReplace, ppStoreContext, use_link);
++}
+ 
+-    TRACE("returning %p\n", ret);
+-    return ret;
++static context_t *MemStore_enumCTL(WINECRYPT_CERTSTORE *store, context_t *prev)
++{
++    WINE_MEMSTORE *ms = (WINE_MEMSTORE *)store;
++
++    TRACE("(%p, %p)\n", store, prev);
++
++    return MemStore_enumContext(ms, &ms->ctls, prev);
+ }
+ 
+-static BOOL CRYPT_MemDeleteCtl(WINECRYPT_CERTSTORE *store, void *pCtlContext)
++static BOOL MemStore_deleteCTL(WINECRYPT_CERTSTORE *store, context_t *context)
+ {
+     WINE_MEMSTORE *ms = (WINE_MEMSTORE *)store;
+-    BOOL ret;
+ 
+-    if (ContextList_Remove(ms->ctls, pCtlContext))
+-        ret = CertFreeCTLContext(pCtlContext);
+-    else
+-        ret = TRUE;
+-    return ret;
++    TRACE("(%p, %p)\n", store, context);
++
++    return MemStore_deleteContext(ms, context);
+ }
+ 
+-static void MemStore_closeStore(WINECRYPT_CERTSTORE *cert_store, DWORD dwFlags)
++static void MemStore_addref(WINECRYPT_CERTSTORE *store)
++{
++    LONG ref = InterlockedIncrement(&store->ref);
++    TRACE("ref = %d\n", ref);
++}
++
++static DWORD MemStore_release(WINECRYPT_CERTSTORE *cert_store, DWORD flags)
+ {
+     WINE_MEMSTORE *store = (WINE_MEMSTORE*)cert_store;
++    LONG ref;
++
++    if(flags & ~CERT_CLOSE_STORE_CHECK_FLAG)
++        FIXME("Unimplemented flags %x\n", flags);
+ 
+-    TRACE("(%p, %08x)\n", store, dwFlags);
+-    if (dwFlags)
+-        FIXME("Unimplemented flags: %08x\n", dwFlags);
+-
+-    ContextList_Free(store->certs);
+-    ContextList_Free(store->crls);
+-    ContextList_Free(store->ctls);
+-    CRYPT_FreeStore((WINECRYPT_CERTSTORE*)store);
++    ref = InterlockedDecrement(&store->hdr.ref);
++    TRACE("(%p) ref=%d\n", store, ref);
++    if(ref)
++        return (flags & CERT_CLOSE_STORE_CHECK_FLAG) ? CRYPT_E_PENDING_CLOSE : ERROR_SUCCESS;
++
++    free_contexts(&store->certs);
++    free_contexts(&store->crls);
++    free_contexts(&store->ctls);
++    store->cs.DebugInfo->Spare[0] = 0;
++    DeleteCriticalSection(&store->cs);
++    CRYPT_FreeStore(&store->hdr);
++    return ERROR_SUCCESS;
+ }
+ 
+ static BOOL MemStore_control(WINECRYPT_CERTSTORE *store, DWORD dwFlags,
+@@ -306,8 +353,23 @@
+ }
+ 
+ static const store_vtbl_t MemStoreVtbl = {
+-    MemStore_closeStore,
+-    MemStore_control
++    MemStore_addref,
++    MemStore_release,
++    MemStore_releaseContext,
++    MemStore_control,
++    {
++        MemStore_addCert,
++        MemStore_enumCert,
++        MemStore_deleteCert
++    }, {
++        MemStore_addCRL,
++        MemStore_enumCRL,
++        MemStore_deleteCRL
++    }, {
++        MemStore_addCTL,
++        MemStore_enumCTL,
++        MemStore_deleteCTL
++    }
+ };
+ 
+ static WINECRYPT_CERTSTORE *CRYPT_MemOpenStore(HCRYPTPROV hCryptProv,
+@@ -329,21 +391,11 @@
+         {
+             memset(store, 0, sizeof(WINE_MEMSTORE));
+             CRYPT_InitStore(&store->hdr, dwFlags, StoreTypeMem, &MemStoreVtbl);
+-            store->hdr.certs.addContext    = CRYPT_MemAddCert;
+-            store->hdr.certs.enumContext   = CRYPT_MemEnumCert;
+-            store->hdr.certs.deleteContext = CRYPT_MemDeleteCert;
+-            store->hdr.crls.addContext     = CRYPT_MemAddCrl;
+-            store->hdr.crls.enumContext    = CRYPT_MemEnumCrl;
+-            store->hdr.crls.deleteContext  = CRYPT_MemDeleteCrl;
+-            store->hdr.ctls.addContext     = CRYPT_MemAddCtl;
+-            store->hdr.ctls.enumContext    = CRYPT_MemEnumCtl;
+-            store->hdr.ctls.deleteContext  = CRYPT_MemDeleteCtl;
+-            store->certs = ContextList_Create(pCertInterface,
+-             sizeof(CERT_CONTEXT));
+-            store->crls = ContextList_Create(pCRLInterface,
+-             sizeof(CRL_CONTEXT));
+-            store->ctls = ContextList_Create(pCTLInterface,
+-             sizeof(CTL_CONTEXT));
++            InitializeCriticalSection(&store->cs);
++            store->cs.DebugInfo->Spare[0] = (DWORD_PTR)(__FILE__ ": ContextList.cs");
++            list_init(&store->certs);
++            list_init(&store->crls);
++            list_init(&store->ctls);
+             /* Mem store doesn't need crypto provider, so close it */
+             if (hCryptProv && !(dwFlags & CERT_STORE_NO_CRYPT_RELEASE_FLAG))
+                 CryptReleaseContext(hCryptProv, 0);
+@@ -880,139 +932,10 @@
+      CERT_SYSTEM_STORE_CURRENT_USER, szSubSystemProtocol);
+ }
+ 
+-BOOL WINAPI CertAddCertificateContextToStore(HCERTSTORE hCertStore,
+- PCCERT_CONTEXT pCertContext, DWORD dwAddDisposition,
+- PCCERT_CONTEXT *ppStoreContext)
+-{
+-    WINECRYPT_CERTSTORE *store = hCertStore;
+-    BOOL ret = TRUE;
+-    PCCERT_CONTEXT toAdd = NULL, existing = NULL;
+-
+-    TRACE("(%p, %p, %08x, %p)\n", hCertStore, pCertContext,
+-     dwAddDisposition, ppStoreContext);
+-
+-    switch (dwAddDisposition)
+-    {
+-    case CERT_STORE_ADD_ALWAYS:
+-        break;
+-    case CERT_STORE_ADD_NEW:
+-    case CERT_STORE_ADD_REPLACE_EXISTING:
+-    case CERT_STORE_ADD_REPLACE_EXISTING_INHERIT_PROPERTIES:
+-    case CERT_STORE_ADD_USE_EXISTING:
+-    case CERT_STORE_ADD_NEWER:
+-    case CERT_STORE_ADD_NEWER_INHERIT_PROPERTIES:
+-    {
+-        BYTE hashToAdd[20];
+-        DWORD size = sizeof(hashToAdd);
+-
+-        ret = CertGetCertificateContextProperty(pCertContext, CERT_HASH_PROP_ID,
+-         hashToAdd, &size);
+-        if (ret)
+-        {
+-            CRYPT_HASH_BLOB blob = { sizeof(hashToAdd), hashToAdd };
+-
+-            existing = CertFindCertificateInStore(hCertStore,
+-             pCertContext->dwCertEncodingType, 0, CERT_FIND_SHA1_HASH, &blob,
+-             NULL);
+-        }
+-        break;
+-    }
+-    default:
+-        FIXME("Unimplemented add disposition %d\n", dwAddDisposition);
+-        SetLastError(E_INVALIDARG);
+-        ret = FALSE;
+-    }
+-
+-    switch (dwAddDisposition)
+-    {
+-    case CERT_STORE_ADD_ALWAYS:
+-        toAdd = CertDuplicateCertificateContext(pCertContext);
+-        break;
+-    case CERT_STORE_ADD_NEW:
+-        if (existing)
+-        {
+-            TRACE("found matching certificate, not adding\n");
+-            SetLastError(CRYPT_E_EXISTS);
+-            ret = FALSE;
+-        }
+-        else
+-            toAdd = CertDuplicateCertificateContext(pCertContext);
+-        break;
+-    case CERT_STORE_ADD_REPLACE_EXISTING:
+-        toAdd = CertDuplicateCertificateContext(pCertContext);
+-        break;
+-    case CERT_STORE_ADD_REPLACE_EXISTING_INHERIT_PROPERTIES:
+-        toAdd = CertDuplicateCertificateContext(pCertContext);
+-        if (existing)
+-            Context_CopyProperties(toAdd, existing);
+-        break;
+-    case CERT_STORE_ADD_USE_EXISTING:
+-        if (existing)
+-        {
+-            Context_CopyProperties(existing, pCertContext);
+-            if (ppStoreContext)
+-                *ppStoreContext = CertDuplicateCertificateContext(existing);
+-        }
+-        else
+-            toAdd = CertDuplicateCertificateContext(pCertContext);
+-        break;
+-    case CERT_STORE_ADD_NEWER:
+-        if (existing)
+-        {
+-            if (CompareFileTime(&existing->pCertInfo->NotBefore,
+-             &pCertContext->pCertInfo->NotBefore) >= 0)
+-            {
+-                TRACE("existing certificate is newer, not adding\n");
+-                SetLastError(CRYPT_E_EXISTS);
+-                ret = FALSE;
+-            }
+-            else
+-                toAdd = CertDuplicateCertificateContext(pCertContext);
+-        }
+-        else
+-            toAdd = CertDuplicateCertificateContext(pCertContext);
+-        break;
+-    case CERT_STORE_ADD_NEWER_INHERIT_PROPERTIES:
+-        if (existing)
+-        {
+-            if (CompareFileTime(&existing->pCertInfo->NotBefore,
+-             &pCertContext->pCertInfo->NotBefore) >= 0)
+-            {
+-                TRACE("existing certificate is newer, not adding\n");
+-                SetLastError(CRYPT_E_EXISTS);
+-                ret = FALSE;
+-            }
+-            else
+-            {
+-                toAdd = CertDuplicateCertificateContext(pCertContext);
+-                Context_CopyProperties(toAdd, existing);
+-            }
+-        }
+-        else
+-            toAdd = CertDuplicateCertificateContext(pCertContext);
+-        break;
+-    }
+-
+-    if (toAdd)
+-    {
+-        if (store)
+-            ret = store->certs.addContext(store, (void *)toAdd,
+-             (void *)existing, (const void **)ppStoreContext);
+-        else if (ppStoreContext)
+-            *ppStoreContext = CertDuplicateCertificateContext(toAdd);
+-        CertFreeCertificateContext(toAdd);
+-    }
+-    CertFreeCertificateContext(existing);
+-
+-    TRACE("returning %d\n", ret);
+-    return ret;
+-}
+-
+-PCCERT_CONTEXT WINAPI CertEnumCertificatesInStore(HCERTSTORE hCertStore,
+- PCCERT_CONTEXT pPrev)
++PCCERT_CONTEXT WINAPI CertEnumCertificatesInStore(HCERTSTORE hCertStore, PCCERT_CONTEXT pPrev)
+ {
++    cert_t *prev = pPrev ? cert_from_ptr(pPrev) : NULL, *ret;
+     WINECRYPT_CERTSTORE *hcs = hCertStore;
+-    PCCERT_CONTEXT ret;
+ 
+     TRACE("(%p, %p)\n", hCertStore, pPrev);
+     if (!hCertStore)
+@@ -1020,36 +943,24 @@
+     else if (hcs->dwMagic != WINE_CRYPTCERTSTORE_MAGIC)
+         ret = NULL;
+     else
+-        ret = (PCCERT_CONTEXT)hcs->certs.enumContext(hcs, (void *)pPrev);
+-    return ret;
++        ret = (cert_t*)hcs->vtbl->certs.enumContext(hcs, prev ? &prev->base : NULL);
++    return ret ? &ret->ctx : NULL;
+ }
+ 
+ BOOL WINAPI CertDeleteCertificateFromStore(PCCERT_CONTEXT pCertContext)
+ {
+-    BOOL ret;
++    WINECRYPT_CERTSTORE *hcs = pCertContext->hCertStore;
+ 
+     TRACE("(%p)\n", pCertContext);
+ 
+     if (!pCertContext)
+-        ret = TRUE;
+-    else if (!pCertContext->hCertStore)
+-        ret = CertFreeCertificateContext(pCertContext);
+-    else
+-    {
+-        WINECRYPT_CERTSTORE *hcs = pCertContext->hCertStore;
++        return TRUE;
+ 
+-        if (hcs->dwMagic != WINE_CRYPTCERTSTORE_MAGIC)
+-            ret = FALSE;
+-        else
+-            ret = hcs->certs.deleteContext(hcs, (void *)pCertContext);
+-        if (ret)
+-            ret = CertFreeCertificateContext(pCertContext);
+-    }
+-    return ret;
+-}
++    if (hcs->dwMagic != WINE_CRYPTCERTSTORE_MAGIC)
++        return FALSE;
+ 
+-#define CrlContext_CopyProperties(to, from) \
+- Context_CopyProperties((to), (from), sizeof(CRL_CONTEXT))
++    return hcs->vtbl->certs.delete(hcs, &cert_from_ptr(pCertContext)->base);
++}
+ 
+ BOOL WINAPI CertAddCRLContextToStore(HCERTSTORE hCertStore,
+  PCCRL_CONTEXT pCrlContext, DWORD dwAddDisposition,
+@@ -1153,14 +1064,19 @@
+ 
+     if (toAdd)
+     {
+-        if (store)
+-            ret = store->crls.addContext(store, (void *)toAdd,
+-             (void *)existing, (const void **)ppStoreContext);
+-        else if (ppStoreContext)
++        if (store) {
++            context_t *ret_context;
++            ret = store->vtbl->crls.addContext(store, context_from_ptr(toAdd),
++             existing ? context_from_ptr(existing) : NULL, ppStoreContext ? &ret_context : NULL, FALSE);
++            if (ret && ppStoreContext)
++                *ppStoreContext = context_ptr(ret_context);
++        }else if (ppStoreContext) {
+             *ppStoreContext = CertDuplicateCRLContext(toAdd);
++        }
+         CertFreeCRLContext(toAdd);
+     }
+-    CertFreeCRLContext(existing);
++    if (existing)
++        CertFreeCRLContext(existing);
+ 
+     TRACE("returning %d\n", ret);
+     return ret;
+@@ -1168,33 +1084,27 @@
+ 
+ BOOL WINAPI CertDeleteCRLFromStore(PCCRL_CONTEXT pCrlContext)
+ {
++    WINECRYPT_CERTSTORE *hcs = pCrlContext->hCertStore;
+     BOOL ret;
+ 
+     TRACE("(%p)\n", pCrlContext);
+ 
+     if (!pCrlContext)
+-        ret = TRUE;
+-    else if (!pCrlContext->hCertStore)
+-        ret = CertFreeCRLContext(pCrlContext);
+-    else
+-    {
+-        WINECRYPT_CERTSTORE *hcs = pCrlContext->hCertStore;
++        return TRUE;
+ 
+-        if (hcs->dwMagic != WINE_CRYPTCERTSTORE_MAGIC)
+-            ret = FALSE;
+-        else
+-            ret = hcs->crls.deleteContext(hcs, (void *)pCrlContext);
+-        if (ret)
+-            ret = CertFreeCRLContext(pCrlContext);
+-    }
++    if (hcs->dwMagic != WINE_CRYPTCERTSTORE_MAGIC)
++        return FALSE;
++
++    ret = hcs->vtbl->crls.delete(hcs, &crl_from_ptr(pCrlContext)->base);
++    if (ret)
++        ret = CertFreeCRLContext(pCrlContext);
+     return ret;
+ }
+ 
+-PCCRL_CONTEXT WINAPI CertEnumCRLsInStore(HCERTSTORE hCertStore,
+- PCCRL_CONTEXT pPrev)
++PCCRL_CONTEXT WINAPI CertEnumCRLsInStore(HCERTSTORE hCertStore, PCCRL_CONTEXT pPrev)
+ {
++    crl_t *ret, *prev = pPrev ? crl_from_ptr(pPrev) : NULL;
+     WINECRYPT_CERTSTORE *hcs = hCertStore;
+-    PCCRL_CONTEXT ret;
+ 
+     TRACE("(%p, %p)\n", hCertStore, pPrev);
+     if (!hCertStore)
+@@ -1202,8 +1112,8 @@
+     else if (hcs->dwMagic != WINE_CRYPTCERTSTORE_MAGIC)
+         ret = NULL;
+     else
+-        ret = (PCCRL_CONTEXT)hcs->crls.enumContext(hcs, (void *)pPrev);
+-    return ret;
++        ret = (crl_t*)hcs->vtbl->crls.enumContext(hcs, prev ? &prev->base : NULL);
++    return ret ? &ret->ctx : NULL;
+ }
+ 
+ HCERTSTORE WINAPI CertDuplicateStore(HCERTSTORE hCertStore)
+@@ -1213,13 +1123,14 @@
+     TRACE("(%p)\n", hCertStore);
+ 
+     if (hcs && hcs->dwMagic == WINE_CRYPTCERTSTORE_MAGIC)
+-        InterlockedIncrement(&hcs->ref);
++        hcs->vtbl->addref(hcs);
+     return hCertStore;
+ }
+ 
+ BOOL WINAPI CertCloseStore(HCERTSTORE hCertStore, DWORD dwFlags)
+ {
+     WINECRYPT_CERTSTORE *hcs = hCertStore;
++    DWORD res;
+ 
+     TRACE("(%p, %08x)\n", hCertStore, dwFlags);
+ 
+@@ -1229,16 +1140,12 @@
+     if ( hcs->dwMagic != WINE_CRYPTCERTSTORE_MAGIC )
+         return FALSE;
+ 
+-    if (hcs->ref <= 0)
+-        ERR("%p's ref count is %d\n", hcs, hcs->ref);
+-    if (InterlockedDecrement(&hcs->ref) == 0)
+-    {
+-        TRACE("%p's ref count is 0, freeing\n", hcs);
+-        hcs->dwMagic = 0;
+-        hcs->vtbl->closeStore(hcs, dwFlags);
++    res = hcs->vtbl->release(hcs, dwFlags);
++    if (res != ERROR_SUCCESS) {
++        SetLastError(res);
++        return FALSE;
+     }
+-    else
+-        TRACE("%p's ref count is %d\n", hcs, hcs->ref);
++
+     return TRUE;
+ }
+ 
+@@ -1478,3 +1385,81 @@
+          dwFlags, debugstr_w(pwszStoreName), pStoreInfo, pvReserved);
+     return FALSE;
+ }
++
++static void EmptyStore_addref(WINECRYPT_CERTSTORE *store)
++{
++    TRACE("(%p)\n", store);
++}
++
++static DWORD EmptyStore_release(WINECRYPT_CERTSTORE *store, DWORD flags)
++{
++    TRACE("(%p)\n", store);
++    return E_UNEXPECTED;
++}
++
++static void EmptyStore_releaseContext(WINECRYPT_CERTSTORE *store, context_t *context)
++{
++    Context_Free(context);
++}
++
++static BOOL EmptyStore_add(WINECRYPT_CERTSTORE *store, context_t *context,
++ context_t *replace, context_t **ret_context, BOOL use_link)
++{
++    TRACE("(%p, %p, %p, %p)\n", store, context, replace, ret_context);
++
++    /* FIXME: We should clone the context */
++    if(ret_context) {
++        Context_AddRef(context);
++        *ret_context = context;
++    }
++
++    return TRUE;
++}
++
++static context_t *EmptyStore_enum(WINECRYPT_CERTSTORE *store, context_t *prev)
++{
++    TRACE("(%p, %p)\n", store, prev);
++
++    SetLastError(CRYPT_E_NOT_FOUND);
++    return NULL;
++}
++
++static BOOL EmptyStore_delete(WINECRYPT_CERTSTORE *store, context_t *context)
++{
++    return TRUE;
++}
++
++static BOOL EmptyStore_control(WINECRYPT_CERTSTORE *store, DWORD flags, DWORD ctrl_type, void const *ctrl_para)
++{
++    TRACE("()\n");
++
++    SetLastError(ERROR_CALL_NOT_IMPLEMENTED);
++    return FALSE;
++}
++
++static const store_vtbl_t EmptyStoreVtbl = {
++    EmptyStore_addref,
++    EmptyStore_release,
++    EmptyStore_releaseContext,
++    EmptyStore_control,
++    {
++        EmptyStore_add,
++        EmptyStore_enum,
++        EmptyStore_delete
++    }, {
++        EmptyStore_add,
++        EmptyStore_enum,
++        EmptyStore_delete
++    }, {
++        EmptyStore_add,
++        EmptyStore_enum,
++        EmptyStore_delete
++    }
++};
++
++WINECRYPT_CERTSTORE empty_store;
++
++void init_empty_store(void)
++{
++    CRYPT_InitStore(&empty_store, CERT_STORE_READONLY_FLAG, StoreTypeEmpty, &EmptyStoreVtbl);
++}
+diff -Naur a/dlls/crypt32/tests/Makefile.in b/dlls/crypt32/tests/Makefile.in
+--- a/dlls/crypt32/tests/Makefile.in	2013-10-11 17:21:06.000000000 +0000
++++ b/dlls/crypt32/tests/Makefile.in	2013-10-25 17:45:30.000000000 +0000
+@@ -1,6 +1,5 @@
+ TESTDLL   = crypt32.dll
+ IMPORTS   = crypt32 advapi32
+-EXTRADEFS = -U__WINESRC__ -DWINE_STRICT_PROTOTYPES -DWINE_NO_NAMELESS_EXTENSION -DWIDL_C_INLINE_WRAPPERS
+ 
+ C_SRCS = \
+ 	base64.c \
+diff -Naur a/dlls/crypt32/tests/cert.c b/dlls/crypt32/tests/cert.c
+--- a/dlls/crypt32/tests/cert.c	2013-10-11 17:21:06.000000000 +0000
++++ b/dlls/crypt32/tests/cert.c	2013-10-25 17:45:30.000000000 +0000
+@@ -660,7 +660,6 @@
+      selfSignedCert, sizeof(selfSignedCert));
+     ok(cert != NULL, "creating cert failed: %08x\n", GetLastError());
+     /* Even in-memory certs are expected to have a store associated with them */
+-    todo_wine
+     ok(cert->hCertStore != NULL, "expected created cert to have a store\n");
+     /* The cert doesn't have the archived property set (which would imply it
+      * doesn't show up in enumerations.)
+@@ -681,8 +680,8 @@
+ 
+ static void testDupCert(void)
+ {
+-    HCERTSTORE store;
+-    PCCERT_CONTEXT context, dupContext;
++    PCCERT_CONTEXT context, dupContext, storeContext, storeContext2, context2;
++    HCERTSTORE store, store2;
+     BOOL ret;
+ 
+     store = CertOpenStore(CERT_STORE_PROV_MEMORY, 0, 0,
+@@ -720,9 +719,86 @@
+     }
+     CertCloseStore(store, 0);
+ 
++    context = CertCreateCertificateContext(X509_ASN_ENCODING, bigCert, sizeof(bigCert));
++    ok(context != NULL, "CertCreateCertificateContext failed\n");
++
++    dupContext = CertDuplicateCertificateContext(context);
++    ok(dupContext == context, "context != dupContext\n");
++
++    ret = CertFreeCertificateContext(dupContext);
++    ok(ret, "CertFreeCertificateContext failed\n");
++
++    store = CertOpenStore(CERT_STORE_PROV_MEMORY, 0, 0, CERT_STORE_CREATE_NEW_FLAG, NULL);
++    ok(store != NULL, "CertOpenStore failed: %d\n", GetLastError());
++
++    ret = CertAddCertificateContextToStore(store, context, CERT_STORE_ADD_NEW, &storeContext);
++    ok(ret, "CertAddCertificateContextToStore failed\n");
++    ok(storeContext != NULL && storeContext != context, "unexpected storeContext\n");
++    ok(storeContext->hCertStore == store, "unexpected hCertStore\n");
++
++    ok(storeContext->pbCertEncoded != context->pbCertEncoded, "unexpected pbCertEncoded\n");
++    ok(storeContext->cbCertEncoded == context->cbCertEncoded, "unexpected cbCertEncoded\n");
++    ok(storeContext->pCertInfo != context->pCertInfo, "unexpected pCertInfo\n");
++
++    store2 = CertOpenStore(CERT_STORE_PROV_MEMORY, 0, 0, CERT_STORE_CREATE_NEW_FLAG, NULL);
++    ok(store2 != NULL, "CertOpenStore failed: %d\n", GetLastError());
++
++    ret = CertAddCertificateContextToStore(store2, storeContext, CERT_STORE_ADD_NEW, &storeContext2);
++    ok(ret, "CertAddCertificateContextToStore failed\n");
++    ok(storeContext2 != NULL && storeContext2 != storeContext, "unexpected storeContext\n");
++    ok(storeContext2->hCertStore == store2, "unexpected hCertStore\n");
++
++    ok(storeContext2->pbCertEncoded != storeContext->pbCertEncoded, "unexpected pbCertEncoded\n");
++    ok(storeContext2->cbCertEncoded == storeContext->cbCertEncoded, "unexpected cbCertEncoded\n");
++    ok(storeContext2->pCertInfo != storeContext->pCertInfo, "unexpected pCertInfo\n");
++
++    CertFreeCertificateContext(storeContext2);
++    CertFreeCertificateContext(storeContext);
++
++    context2 = CertCreateCertificateContext(X509_ASN_ENCODING, certWithUsage, sizeof(certWithUsage));
++    ok(context2 != NULL, "CertCreateCertificateContext failed\n");
++
++    ok(context2->hCertStore == context->hCertStore, "Unexpected hCertStore\n");
++
++    CertFreeCertificateContext(context2);
++    ret = CertFreeCertificateContext(context);
++    ok(ret, "CertFreeCertificateContext failed\n");
++
++    CertCloseStore(store, 0);
++    CertCloseStore(store2, 0);
++
+     SetLastError(0xdeadbeef);
+     context = CertDuplicateCertificateContext(NULL);
+     ok(context == NULL, "Expected context to be NULL\n");
++
++    ret = CertFreeCertificateContext(NULL);
++    ok(ret, "CertFreeCertificateContext failed\n");
++}
++
++static void testLinkCert(void)
++{
++    const CERT_CONTEXT *context, *link;
++    HCERTSTORE store;
++    BOOL ret;
++
++    context = CertCreateCertificateContext(X509_ASN_ENCODING, bigCert, sizeof(bigCert));
++    ok(context != NULL, "CertCreateCertificateContext failed\n");
++
++    store = CertOpenStore(CERT_STORE_PROV_MEMORY, 0, 0, CERT_STORE_CREATE_NEW_FLAG, NULL);
++    ok(store != NULL, "CertOpenStore failed: %d\n", GetLastError());
++
++    ret = CertAddCertificateLinkToStore(store, context, CERT_STORE_ADD_NEW, &link);
++    ok(ret, "CertAddCertificateContextToStore failed\n");
++    ok(link != NULL && link != context, "unexpected storeContext\n");
++    ok(link->hCertStore == store, "unexpected hCertStore\n");
++
++    ok(link->pbCertEncoded == context->pbCertEncoded, "unexpected pbCertEncoded\n");
++    ok(link->cbCertEncoded == context->cbCertEncoded, "unexpected cbCertEncoded\n");
++    ok(link->pCertInfo == context->pCertInfo, "unexpected pCertInfo\n");
++
++    CertFreeCertificateContext(link);
++
++    CertCloseStore(store, 0);
+ }
+ 
+ static BYTE subjectName3[] = { 0x30, 0x15, 0x31, 0x13, 0x30, 0x11, 0x06,
+@@ -3903,6 +3979,7 @@
+     testFindCert();
+     testGetSubjectCert();
+     testGetIssuerCert();
++    testLinkCert();
+ 
+     testCryptHashCert();
+     testCertSigs();
+diff -Naur a/dlls/crypt32/tests/crl.c b/dlls/crypt32/tests/crl.c
+--- a/dlls/crypt32/tests/crl.c	2013-10-11 17:21:06.000000000 +0000
++++ b/dlls/crypt32/tests/crl.c	2013-10-25 17:45:30.000000000 +0000
+@@ -120,6 +120,7 @@
+ static void testDupCRL(void)
+ {
+     PCCRL_CONTEXT context, dupContext;
++    BOOL res;
+ 
+     context = CertDuplicateCRLContext(NULL);
+     ok(context == NULL, "expected NULL\n");
+@@ -128,15 +129,22 @@
+     dupContext = CertDuplicateCRLContext(context);
+     ok(dupContext != NULL, "expected a context\n");
+     ok(dupContext == context, "expected identical context addresses\n");
+-    CertFreeCRLContext(dupContext);
+-    CertFreeCRLContext(context);
++
++    res = CertFreeCRLContext(dupContext);
++    ok(res, "CertFreeCRLContext failed\n");
++
++    res = CertFreeCRLContext(context);
++    ok(res, "CertFreeCRLContext failed\n");
++
++    res = CertFreeCRLContext(NULL);
++    ok(res, "CertFreeCRLContext failed\n");
+ }
+ 
+ static void testAddCRL(void)
+ {
+     HCERTSTORE store = CertOpenStore(CERT_STORE_PROV_MEMORY, 0, 0,
+      CERT_STORE_CREATE_NEW_FLAG, NULL);
+-    PCCRL_CONTEXT context;
++    PCCRL_CONTEXT context, context2;
+     BOOL ret;
+     DWORD GLE;
+ 
+@@ -221,6 +229,24 @@
+     ok(ret, "CertAddEncodedCRLToStore failed: %08x\n", GetLastError());
+ 
+     CertCloseStore(store, 0);
++
++    store = CertOpenStore(CERT_STORE_PROV_MEMORY, 0, 0, CERT_STORE_CREATE_NEW_FLAG, NULL);
++    ok(store != NULL, "CertOpenStore failed\n");
++
++    context = CertCreateCRLContext(X509_ASN_ENCODING, CRL, sizeof(CRL));
++    ok(context != NULL, "CertCreateCRLContext failed\n");
++
++    ret = CertAddCRLContextToStore(store, context, CERT_STORE_ADD_NEW, &context2);
++    ok(ret, "CertAddCRLContextToStore failed\n");
++    ok(context2 != NULL && context2 != context, "unexpected context2\n");
++
++    ok(context->pbCrlEncoded != context2->pbCrlEncoded, "Unexpected pbCrlEncoded\n");
++    ok(context->cbCrlEncoded == context2->cbCrlEncoded, "Unexpected cbCrlEncoded\n");
++    ok(context->pCrlInfo != context2->pCrlInfo, "Unexpected pCrlInfo\n");
++
++    CertFreeCRLContext(context2);
++    CertFreeCRLContext(context);
++    CertCloseStore(store, 0);
+ }
+ 
+ static const BYTE v1CRLWithIssuerAndEntry[] = { 0x30, 0x44, 0x30, 0x02, 0x06,
+diff -Naur a/dlls/crypt32/tests/ctl.c b/dlls/crypt32/tests/ctl.c
+--- a/dlls/crypt32/tests/ctl.c	2013-10-11 17:21:06.000000000 +0000
++++ b/dlls/crypt32/tests/ctl.c	2013-10-25 17:45:30.000000000 +0000
+@@ -190,6 +190,7 @@
+ static void testDupCTL(void)
+ {
+     PCCTL_CONTEXT context, dupContext;
++    BOOL res;
+ 
+     context = CertDuplicateCTLContext(NULL);
+     ok(context == NULL, "expected NULL\n");
+@@ -198,8 +199,15 @@
+     dupContext = CertDuplicateCTLContext(context);
+     ok(dupContext != NULL, "expected a context\n");
+     ok(dupContext == context, "expected identical context addresses\n");
+-    CertFreeCTLContext(dupContext);
+-    CertFreeCTLContext(context);
++
++    res = CertFreeCTLContext(dupContext);
++    ok(res, "CertFreeCTLContext failed\n");
++
++    res = CertFreeCTLContext(context);
++    ok(res, "CertFreeCTLContext failed\n");
++
++    res = CertFreeCTLContext(NULL);
++    ok(res, "CertFreeCTLContext failed\n");
+ }
+ 
+ static void checkHash(const BYTE *data, DWORD dataLen, ALG_ID algID,
+diff -Naur a/dlls/crypt32/tests/encode.c b/dlls/crypt32/tests/encode.c
+--- a/dlls/crypt32/tests/encode.c	2013-10-11 17:21:06.000000000 +0000
++++ b/dlls/crypt32/tests/encode.c	2013-10-25 17:45:30.000000000 +0000
+@@ -8054,9 +8054,9 @@
+     PCERT_PUBLIC_KEY_INFO info = NULL;
+ 
+     /* Just in case a previous run failed, delete this thing */
+-    CryptAcquireContextA(&csp, cspName, MS_DEF_PROV, PROV_RSA_FULL,
++    CryptAcquireContextA(&csp, cspName, MS_DEF_PROV_A, PROV_RSA_FULL,
+      CRYPT_DELETEKEYSET);
+-    ret = CryptAcquireContextA(&csp, cspName, MS_DEF_PROV, PROV_RSA_FULL,
++    ret = CryptAcquireContextA(&csp, cspName, MS_DEF_PROV_A, PROV_RSA_FULL,
+      CRYPT_NEWKEYSET);
+     ok(ret,"CryptAcquireContextA failed\n");
+ 
+@@ -8065,7 +8065,7 @@
+ 
+     HeapFree(GetProcessHeap(), 0, info);
+     CryptReleaseContext(csp, 0);
+-    ret = CryptAcquireContextA(&csp, cspName, MS_DEF_PROV, PROV_RSA_FULL,
++    ret = CryptAcquireContextA(&csp, cspName, MS_DEF_PROV_A, PROV_RSA_FULL,
+      CRYPT_DELETEKEYSET);
+     ok(ret,"CryptAcquireContextA failed\n");
+ }
+diff -Naur a/dlls/crypt32/tests/store.c b/dlls/crypt32/tests/store.c
+--- a/dlls/crypt32/tests/store.c	2013-10-11 17:21:06.000000000 +0000
++++ b/dlls/crypt32/tests/store.c	2013-10-25 17:45:30.000000000 +0000
+@@ -93,6 +93,26 @@
+  0x4c, 0x61, 0x6e, 0x67, 0x00, 0x30, 0x07, 0x30, 0x02, 0x06, 0x00, 0x03, 0x01,
+  0x00, 0xa3, 0x16, 0x30, 0x14, 0x30, 0x12, 0x06, 0x03, 0x55, 0x1d, 0x13, 0x01,
+  0x01, 0xff, 0x04, 0x08, 0x30, 0x06, 0x01, 0x01, 0xff, 0x02, 0x01, 0x01 };
++static const BYTE signedCTLWithCTLInnerContent[] = {
++0x30,0x82,0x01,0x0f,0x06,0x09,0x2a,0x86,0x48,0x86,0xf7,0x0d,0x01,0x07,0x02,
++0xa0,0x82,0x01,0x00,0x30,0x81,0xfd,0x02,0x01,0x01,0x31,0x0e,0x30,0x0c,0x06,
++0x08,0x2a,0x86,0x48,0x86,0xf7,0x0d,0x02,0x05,0x05,0x00,0x30,0x30,0x06,0x09,
++0x2b,0x06,0x01,0x04,0x01,0x82,0x37,0x0a,0x01,0xa0,0x23,0x30,0x21,0x30,0x00,
++0x18,0x0f,0x31,0x36,0x30,0x31,0x30,0x31,0x30,0x31,0x30,0x30,0x30,0x30,0x30,
++0x30,0x5a,0x30,0x0c,0x06,0x08,0x2a,0x86,0x48,0x86,0xf7,0x0d,0x02,0x05,0x05,
++0x00,0x31,0x81,0xb5,0x30,0x81,0xb2,0x02,0x01,0x01,0x30,0x1a,0x30,0x15,0x31,
++0x13,0x30,0x11,0x06,0x03,0x55,0x04,0x03,0x13,0x0a,0x4a,0x75,0x61,0x6e,0x20,
++0x4c,0x61,0x6e,0x67,0x00,0x02,0x01,0x01,0x30,0x0c,0x06,0x08,0x2a,0x86,0x48,
++0x86,0xf7,0x0d,0x02,0x05,0x05,0x00,0xa0,0x3b,0x30,0x18,0x06,0x09,0x2a,0x86,
++0x48,0x86,0xf7,0x0d,0x01,0x09,0x03,0x31,0x0b,0x06,0x09,0x2b,0x06,0x01,0x04,
++0x01,0x82,0x37,0x0a,0x01,0x30,0x1f,0x06,0x09,0x2a,0x86,0x48,0x86,0xf7,0x0d,
++0x01,0x09,0x04,0x31,0x12,0x04,0x10,0x54,0x71,0xbc,0xe1,0x56,0x31,0xa2,0xf9,
++0x65,0x70,0x34,0xf8,0xe2,0xe9,0xb4,0xf4,0x30,0x04,0x06,0x00,0x05,0x00,0x04,
++0x40,0x2f,0x1b,0x9f,0x5a,0x4a,0x15,0x73,0xfa,0xb1,0x93,0x3d,0x09,0x52,0xdf,
++0x6b,0x98,0x4b,0x13,0x5e,0xe7,0xbf,0x65,0xf4,0x9c,0xc2,0xb1,0x77,0x09,0xb1,
++0x66,0x4d,0x72,0x0d,0xb1,0x1a,0x50,0x20,0xe0,0x57,0xa2,0x39,0xc7,0xcd,0x7f,
++0x8e,0xe7,0x5f,0x76,0x2b,0xd1,0x6a,0x82,0xb3,0x30,0x25,0x61,0xf6,0x25,0x23,
++0x57,0x6c,0x0b,0x47,0xb8 };
+ 
+ 
+ static BOOL (WINAPI *pCertAddStoreToCollection)(HCERTSTORE,HCERTSTORE,DWORD,DWORD);
+@@ -2510,12 +2530,14 @@
+ static void testEmptyStore(void)
+ {
+     const CERT_CONTEXT *cert, *cert2, *cert3;
++    const CRL_CONTEXT *crl;
++    const CTL_CONTEXT *ctl;
+     HCERTSTORE store;
+     BOOL res;
+ 
+     cert = CertCreateCertificateContext(X509_ASN_ENCODING, bigCert, sizeof(bigCert));
+     ok(cert != NULL, "CertCreateCertificateContext failed\n");
+-    todo_wine ok(cert->hCertStore != NULL, "cert->hCertStore == NULL\n");
++    ok(cert->hCertStore != NULL, "cert->hCertStore == NULL\n");
+     if(!cert->hCertStore) {
+         CertFreeCertificateContext(cert);
+         return;
+@@ -2555,10 +2577,124 @@
+     ok(res, "CertDeleteCertificateContextFromStore failed\n");
+     ok(cert3->hCertStore == store, "Unexpected hCertStore\n");
+ 
++    CertFreeCertificateContext(cert3);
++
+     CertCloseStore(store, 0);
+ 
++    res = CertCloseStore(cert->hCertStore, CERT_CLOSE_STORE_CHECK_FLAG);
++    ok(!res && GetLastError() == E_UNEXPECTED, "CertCloseStore returned: %x(%x)\n", res, GetLastError());
++
++    res = CertCloseStore(cert->hCertStore, 0);
++    ok(!res && GetLastError() == E_UNEXPECTED, "CertCloseStore returned: %x(%x)\n", res, GetLastError());
++
+     CertFreeCertificateContext(cert2);
++
++    crl = CertCreateCRLContext(X509_ASN_ENCODING, signedCRL, sizeof(signedCRL));
++    ok(crl != NULL, "CertCreateCRLContext failed\n");
++    ok(crl->hCertStore == cert->hCertStore, "unexpected hCertStore\n");
++
++    CertFreeCRLContext(crl);
++
++    ctl = CertCreateCTLContext(X509_ASN_ENCODING, signedCTLWithCTLInnerContent, sizeof(signedCTLWithCTLInnerContent));
++    ok(ctl != NULL, "CertCreateCTLContext failed\n");
++    ok(ctl->hCertStore == cert->hCertStore, "unexpected hCertStore\n");
++
++    CertFreeCTLContext(ctl);
++
++    CertFreeCertificateContext(cert);
++}
++
++static void testCloseStore(void)
++{
++    const CERT_CONTEXT *cert;
++    const CRL_CONTEXT *crl;
++    const CTL_CONTEXT *ctl;
++    HCERTSTORE store, store2;
++    BOOL res;
++
++    store = CertOpenStore(CERT_STORE_PROV_MEMORY, 0, 0, CERT_STORE_CREATE_NEW_FLAG, NULL);
++    ok(store != NULL, "CertOpenStore failed\n");
++
++    res = CertCloseStore(store, CERT_CLOSE_STORE_CHECK_FLAG);
++    ok(res, "CertCloseStore failed\n");
++
++    store = CertOpenStore(CERT_STORE_PROV_MEMORY, 0, 0, CERT_STORE_CREATE_NEW_FLAG, NULL);
++    ok(store != NULL, "CertOpenStore failed\n");
++
++    store2 = CertDuplicateStore(store);
++    ok(store2 != NULL, "CertCloneStore failed\n");
++    ok(store2 == store, "unexpected store2\n");
++
++    res = CertCloseStore(store, CERT_CLOSE_STORE_CHECK_FLAG);
++    ok(!res && GetLastError() == CRYPT_E_PENDING_CLOSE, "CertCloseStore failed\n");
++
++    res = CertCloseStore(store2, CERT_CLOSE_STORE_CHECK_FLAG);
++    ok(res, "CertCloseStore failed\n");
++
++    store = CertOpenStore(CERT_STORE_PROV_MEMORY, 0, 0, CERT_STORE_CREATE_NEW_FLAG, NULL);
++    ok(store != NULL, "CertOpenStore failed\n");
++
++    res = CertAddEncodedCertificateToStore(store, X509_ASN_ENCODING, bigCert,
++     sizeof(bigCert), CERT_STORE_ADD_ALWAYS, &cert);
++    ok(res, "CertAddEncodedCertificateToStore failed\n");
++
++    /* There is still a reference from cert */
++    res = CertCloseStore(store, CERT_CLOSE_STORE_CHECK_FLAG);
++    ok(!res && GetLastError() == CRYPT_E_PENDING_CLOSE, "CertCloseStore failed\n");
++
++    res = CertFreeCertificateContext(cert);
++    ok(res, "CertFreeCertificateContext failed\n");
++
++    store = CertOpenStore(CERT_STORE_PROV_MEMORY, 0, 0, CERT_STORE_CREATE_NEW_FLAG, NULL);
++    ok(store != NULL, "CertOpenStore failed\n");
++
++    res = CertAddEncodedCRLToStore(store, X509_ASN_ENCODING, signedCRL,
++     sizeof(signedCRL), CERT_STORE_ADD_ALWAYS, &crl);
++    ok(res, "CertAddEncodedCRLToStore failed\n");
++
++    /* There is still a reference from CRL */
++    res = CertCloseStore(store, CERT_CLOSE_STORE_CHECK_FLAG);
++    ok(!res && GetLastError() == CRYPT_E_PENDING_CLOSE, "CertCloseStore failed\n");
++
++    res = CertFreeCRLContext(crl);
++    ok(res, "CertFreeCRLContext failed\n");
++
++    store = CertOpenStore(CERT_STORE_PROV_MEMORY, 0, 0, CERT_STORE_CREATE_NEW_FLAG, NULL);
++    ok(store != NULL, "CertOpenStore failed\n");
++
++    res = CertAddEncodedCTLToStore(store, X509_ASN_ENCODING, signedCTLWithCTLInnerContent,
++     sizeof(signedCTLWithCTLInnerContent), CERT_STORE_ADD_ALWAYS, &ctl);
++    ok(res, "CertAddEncodedCTLToStore failed\n");
++
++    /* There is still a reference from CTL */
++    res = CertCloseStore(store, CERT_CLOSE_STORE_CHECK_FLAG);
++    ok(!res && GetLastError() == CRYPT_E_PENDING_CLOSE, "CertCloseStore returned: %x(%u)\n", res, GetLastError());
++
++    res = CertFreeCTLContext(ctl);
++    ok(res, "CertFreeCTLContext failed\n");
++
++    /* Add all kinds of contexts, then release external references and make sure that store is properly closed. */
++    store = CertOpenStore(CERT_STORE_PROV_MEMORY, 0, 0, CERT_STORE_CREATE_NEW_FLAG, NULL);
++    ok(store != NULL, "CertOpenStore failed\n");
++
++    res = CertAddEncodedCertificateToStore(store, X509_ASN_ENCODING, bigCert,
++     sizeof(bigCert), CERT_STORE_ADD_ALWAYS, &cert);
++    ok(res, "CertAddEncodedCertificateToStore failed\n");
++
++    res = CertAddEncodedCRLToStore(store, X509_ASN_ENCODING, signedCRL,
++     sizeof(signedCRL), CERT_STORE_ADD_ALWAYS, &crl);
++    ok(res, "CertAddEncodedCRLToStore failed\n");
++
++    res = CertAddEncodedCTLToStore(store, X509_ASN_ENCODING, signedCTLWithCTLInnerContent,
++     sizeof(signedCTLWithCTLInnerContent), CERT_STORE_ADD_ALWAYS, &ctl);
++    ok(res, "CertAddEncodedCTLToStore failed\n");
++
+     CertFreeCertificateContext(cert);
++    CertFreeCRLContext(crl);
++    CertFreeCTLContext(ctl);
++
++    res = CertCloseStore(store, CERT_CLOSE_STORE_CHECK_FLAG);
++    ok(res, "CertCloseStore failed\n");
+ }
+ 
+ static void test_I_UpdateStore(void)
+@@ -2659,6 +2795,7 @@
+     testFileNameStore();
+     testMessageStore();
+     testSerializedStore();
++    testCloseStore();
+ 
+     testCertOpenSystemStore();
+     testCertEnumSystemStore();
