@@ -1,0 +1,27 @@
+@@ -, +, @@ 
+---
+ dlls/gdiplus/image.c | 13 +++++++++++++
+ 1 file changed, 13 insertions(+)
+--- a/dlls/gdiplus/image.c	
++++ a/dlls/gdiplus/image.c	
+@@ -4064,6 +4064,19 @@ static GpStatus encode_image_WIC(GpImage *image, IStream* stream,
+             }
+ 
+             hr = IWICBitmapFrameEncode_SetPixelFormat(frameencode, &wicformat);
++
++            for (i=0; pixel_formats[i].wic_format; i++)
++            {
++                if (IsEqualGUID(&wicformat, pixel_formats[i].wic_format))
++                    break;
++            }
++            if (pixel_formats[i].wic_format)
++                gdipformat = pixel_formats[i].gdip_format;
++            else
++            {
++                ERR("cannot provide pixel format %s\n", debugstr_guid(&wicformat));
++                hr = E_FAIL;
++            }
+         }
+ 
+         if (SUCCEEDED(hr))
+-- 
