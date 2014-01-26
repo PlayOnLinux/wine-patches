@@ -1,0 +1,257 @@
+diff --git a/dlls/ddraw/tests/d3d.c b/dlls/ddraw/tests/d3d.c
+index 4cd9346..696fd91 100644
+--- a/dlls/ddraw/tests/d3d.c
++++ b/dlls/ddraw/tests/d3d.c
+@@ -1371,8 +1371,10 @@ static void ViewportTest(void)
+ static void Direct3D1Test(void)
+ {
+     HRESULT hr;
++    IDirect3DViewport2 *Viewport2;
+     D3DEXECUTEBUFFERDESC desc;
+     D3DVIEWPORT vp_data;
++    D3DVIEWPORT2 vp2_data;
+     D3DINSTRUCTION *instr;
+     D3DBRANCH *branch;
+     IDirect3D *Direct3D_alt;
+@@ -1737,6 +1739,86 @@ static void Direct3D1Test(void)
+                                              &i);
+     ok(hr == DDERR_INVALIDPARAMS, "IDirect3DViewport_TransformVertices returned %08x\n", hr);
+ 
++    /* Test transformations when viewport was set up with IDirect3DViewport2::SetViewport2 */
++    hr = IDirect3DViewport_QueryInterface(Viewport, &IID_IDirect3DViewport2, (void**) &Viewport2);
++    ok(hr == D3D_OK, "QueryInterface returned: %x\n", hr);
++
++    memset(&transformdata, 0, sizeof(transformdata));
++    transformdata.dwSize = sizeof(transformdata);
++    transformdata.lpIn = testverts;
++    transformdata.dwInSize = sizeof(testverts[0]);
++    transformdata.lpOut = out;
++    transformdata.dwOutSize = sizeof(out[0]);
++    transformdata.lpHOut = NULL;
++
++    vp2_data.dwSize = sizeof(vp2_data);
++    vp2_data.dwX = 0;
++    vp2_data.dwY = 0;
++    vp2_data.dwWidth = 600;
++    vp2_data.dwHeight = 400;
++    vp2_data.dvClipX = -1.f;
++    vp2_data.dvClipY = 1.f;
++    vp2_data.dvClipWidth = 2.f;
++    vp2_data.dvClipHeight = 2.f;
++    vp2_data.dvMinZ = 0.f;
++    vp2_data.dvMaxZ = 1.f;
++    hr = IDirect3DViewport2_SetViewport2(Viewport2, &vp2_data);
++    ok(hr == D3D_OK, "IDirect3DViewport_SetViewport returned %08x\n", hr);
++
++    memset(out, 0xcc, sizeof(out));
++    hr = IDirect3DViewport2_TransformVertices(Viewport2, sizeof(testverts) / sizeof(testverts[0]),
++                                              &transformdata, D3DTRANSFORM_UNCLIPPED,
++                                              &i);
++    ok(hr == D3D_OK, "IDirect3DViewport_TransformVertices returned %08x\n", hr);
++    ok(i == 0, "Offscreen is %d\n", i);
++
++    for(i = 0; i < sizeof(testverts) / sizeof(testverts[0]); i++) {
++        static const struct v_out cmp[] = {
++            {300.0, 200.0,  0.0, 1}, {600.0,   0.0,  1.0, 1}, {  0.0, 400.0, -1.0, 1},
++            {450.0, 100.0,  0.5, 1}, {150.0, 300.0, -0.5, 1}, {150.0, 300.0,  0.0, 1}
++        };
++        ok(cmp[i].x == out[i].x && cmp[i].y == out[i].y &&
++           cmp[i].z == out[i].z && cmp[i].rhw == out[i].rhw,
++           "Vertex %d differs. Got %f %f %f %f, expected %f %f %f %f\n", i + 1,
++           out[i].x, out[i].y, out[i].z, out[i].rhw,
++           cmp[i].x, cmp[i].y, cmp[i].z, cmp[i].rhw);
++    }
++
++    vp2_data.dwSize = sizeof(vp2_data);
++    vp2_data.dwX = 400;
++    vp2_data.dwY = 50;
++    vp2_data.dwWidth = 300;
++    vp2_data.dwHeight = 200;
++    vp2_data.dvClipX = -2.f;
++    vp2_data.dvClipY = 3.f;
++    vp2_data.dvClipWidth = 3.f;
++    vp2_data.dvClipHeight = 8.f;
++    vp2_data.dvMinZ = 0.5f;
++    vp2_data.dvMaxZ = -3.5f;
++    hr = IDirect3DViewport2_SetViewport2(Viewport2, &vp2_data);
++    ok(hr == D3D_OK, "IDirect3DViewport_SetViewport returned %08x\n", hr);
++
++    memset(out, 0xcc, sizeof(out));
++    hr = IDirect3DViewport2_TransformVertices(Viewport2, sizeof(testverts) / sizeof(testverts[0]),
++                                              &transformdata, D3DTRANSFORM_UNCLIPPED,
++                                              &i);
++    ok(hr == D3D_OK, "IDirect3DViewport_TransformVertices returned %08x\n", hr);
++    ok(i == 0, "Offscreen is %d\n", i);
++
++    for(i = 0; i < sizeof(testverts) / sizeof(testverts[0]); i++) {
++        static const struct v_out cmp[] = {
++            {600.0, 125.0, 0.125, 1}, {700.0, 100.0, -0.125, 1}, {500.0, 150.0, 0.375, 1},
++            {650.0, 112.5, 0.0  , 1}, {550.0, 137.5,  0.25 , 1}, {550.0, 137.5, 0.125, 1}
++        };
++        ok(cmp[i].x == out[i].x && cmp[i].y == out[i].y &&
++           cmp[i].z == out[i].z && cmp[i].rhw == out[i].rhw,
++           "Vertex %d differs. Got %f %f %f %f, expected %f %f %f %f\n", i + 1,
++           out[i].x, out[i].y, out[i].z, out[i].rhw,
++           cmp[i].x, cmp[i].y, cmp[i].z, cmp[i].rhw);
++    }
++
++    IDirect3DViewport2_Release(Viewport2);
++
+     hr = IDirect3DDevice_DeleteViewport(Direct3DDevice1, Viewport);
+     ok(hr == D3D_OK, "IDirect3DDevice_DeleteViewport returned %08x\n", hr);
+ 
+diff --git a/dlls/ddraw/viewport.c b/dlls/ddraw/viewport.c
+index 7dd1b5e..ff9527d 100644
+--- a/dlls/ddraw/viewport.c
++++ b/dlls/ddraw/viewport.c
+@@ -340,7 +340,7 @@ IDirect3DViewportImpl_SetViewport(IDirect3DViewport3 *iface,
+  * then there is the homogeneous vertex that is generated. Also there's a lack
+  * of FVFs, but still a custom stride. Last, the d3d1 - d3d3 viewport has some
+  * settings (scale) that d3d7 and wined3d do not have. All in all wrapping to
+- * ProcessVertices doesn't pay of in terms of wrapper code needed and code
++ * ProcessVertices doesn't pay off in terms of wrapper code needed and code
+  * reused.
+  *
+  * Params:
+@@ -364,13 +364,13 @@ IDirect3DViewportImpl_TransformVertices(IDirect3DViewport3 *iface,
+                                         DWORD *lpOffScreen)
+ {
+     IDirect3DViewportImpl *This = impl_from_IDirect3DViewport3(iface);
+-    D3DMATRIX view_mat, world_mat, proj_mat, mat;
++    D3DMATRIX view_mat, world_mat, proj_mat, clip_mat, mat;
+     float *in;
+     float *out;
+-    float x, y, z, w;
++    float hx, hy, hz, hw, x, y, z, w;
+     unsigned int i;
+-    D3DVIEWPORT vp = This->viewports.vp1;
+     D3DHVERTEX *outH;
++    float offX, offY, scaleX, scaleY;
+ 
+     TRACE("iface %p, vertex_count %u, vertex_data %p, flags %#x, clip_plane %p.\n",
+             iface, dwVertexCount, lpData, dwFlags, lpOffScreen);
+@@ -390,8 +390,37 @@ IDirect3DViewportImpl_TransformVertices(IDirect3DViewport3 *iface,
+         return DDERR_INVALIDPARAMS;
+     }
+ 
+-
+     EnterCriticalSection(&ddraw_cs);
++    if (This->use_vp2)
++    {
++        D3DVIEWPORT2 *vp2 = &This->viewports.vp2;
++        memset(&clip_mat, 0, sizeof(clip_mat));
++        clip_mat._11 = 2.f / vp2->dvClipWidth;
++        clip_mat._22 = 2.f / vp2->dvClipHeight;
++        clip_mat._33 = 1.f / (vp2->dvMaxZ - vp2->dvMinZ);
++        clip_mat._41 = -1.f - vp2->dvClipX * clip_mat._11;
++        clip_mat._42 =  1.f - vp2->dvClipY * clip_mat._22;
++        clip_mat._43 = -vp2->dvMinZ * clip_mat._33;
++        clip_mat._44 = 1.f;
++        scaleX = .5f * vp2->dwWidth;
++        scaleY = -.5f * vp2->dwHeight;
++        offX = vp2->dwX + scaleX;
++        offY = vp2->dwY - scaleY;
++    }
++    else
++    {
++        D3DVIEWPORT *vp1 = &This->viewports.vp1;
++        memset(&clip_mat, 0, sizeof(clip_mat));
++        clip_mat._11 = 2.f * vp1->dvScaleX / vp1->dwWidth;
++        clip_mat._22 = 2.f * vp1->dvScaleY / vp1->dwHeight;
++        clip_mat._33 = 1.f;
++        clip_mat._44 = 1.f;
++        scaleX = .5f * vp1->dwWidth;
++        scaleY = -.5f * vp1->dwHeight;
++        offX = vp1->dwX + scaleX;
++        offY = vp1->dwY - scaleY;
++    }
++
+     wined3d_device_get_transform(This->active_device->wined3d_device,
+             D3DTRANSFORMSTATE_VIEW, (WINED3DMATRIX *)&view_mat);
+     wined3d_device_get_transform(This->active_device->wined3d_device,
+@@ -406,30 +435,38 @@ IDirect3DViewportImpl_TransformVertices(IDirect3DViewport3 *iface,
+     outH = lpData->lpHOut;
+     for(i = 0; i < dwVertexCount; i++)
+     {
+-        x = (in[0] * mat._11) + (in[1] * mat._21) + (in[2] * mat._31) + (1.0 * mat._41);
+-        y = (in[0] * mat._12) + (in[1] * mat._22) + (in[2] * mat._32) + (1.0 * mat._42);
+-        z = (in[0] * mat._13) + (in[1] * mat._23) + (in[2] * mat._33) + (1.0 * mat._43);
+-        w = (in[0] * mat._14) + (in[1] * mat._24) + (in[2] * mat._34) + (1.0 * mat._44);
++        hx = (in[0] * mat._11) + (in[1] * mat._21) + (in[2] * mat._31) + (1.f * mat._41);
++        hy = (in[0] * mat._12) + (in[1] * mat._22) + (in[2] * mat._32) + (1.f * mat._42);
++        hz = (in[0] * mat._13) + (in[1] * mat._23) + (in[2] * mat._33) + (1.f * mat._43);
++        hw = (in[0] * mat._14) + (in[1] * mat._24) + (in[2] * mat._34) + (1.f * mat._44);
++
++        hw = 1.f / hw;
++        hx *= hw; hy *= hw; hz *= hw;
++
++        x = hx * clip_mat._11 + hw * clip_mat._41;
++        y = hy * clip_mat._22 + hw * clip_mat._42;
++        z = hz * clip_mat._33 + hw * clip_mat._43;
++        w = hw * clip_mat._44;
+ 
+         if(dwFlags & D3DTRANSFORM_CLIPPED)
+         {
+             /* If clipping is enabled, Windows assumes that outH is
+              * a valid pointer
+              */
+-            outH[i].u1.hx = x; outH[i].u2.hy = y; outH[i].u3.hz = z;
++            outH[i].u1.hx = hx; outH[i].u2.hy = hy; outH[i].u3.hz = hz;
+ 
+             outH[i].dwFlags = 0;
+-            if(x * vp.dvScaleX > ((float) vp.dwWidth * 0.5))
+-                outH[i].dwFlags |= D3DCLIP_RIGHT;
+-            if(x * vp.dvScaleX <= -((float) vp.dwWidth) * 0.5)
++            if(x < -w)
+                 outH[i].dwFlags |= D3DCLIP_LEFT;
+-            if(y * vp.dvScaleY > ((float) vp.dwHeight * 0.5))
+-                outH[i].dwFlags |= D3DCLIP_TOP;
+-            if(y * vp.dvScaleY <= -((float) vp.dwHeight) * 0.5)
++            if(x > w)
++                outH[i].dwFlags |= D3DCLIP_RIGHT;
++            if(y < -w)
+                 outH[i].dwFlags |= D3DCLIP_BOTTOM;
+-            if(z < 0.0)
++            if(y > w)
++                outH[i].dwFlags |= D3DCLIP_TOP;
++            if(z < 0.f)
+                 outH[i].dwFlags |= D3DCLIP_FRONT;
+-            if(z > 1.0)
++            if(z > 1.f)
+                 outH[i].dwFlags |= D3DCLIP_BACK;
+ 
+             if(outH[i].dwFlags)
+@@ -439,23 +476,24 @@ IDirect3DViewportImpl_TransformVertices(IDirect3DViewport3 *iface,
+                  * The exact scheme hasn't been figured out yet, but windows
+                  * definitely writes something there.
+                  */
+-                out[0] = x;
+-                out[1] = y;
+-                out[2] = z;
+-                out[3] = w;
++                out[0] = hx;
++                out[1] = hy;
++                out[2] = hz;
++                out[3] = hw;
+                 in = (float *) ((char *) in + lpData->dwInSize);
+                 out = (float *) ((char *) out + lpData->dwOutSize);
+                 continue;
+             }
+         }
+ 
+-        w = 1 / w;
+-        x *= w; y *= w; z *= w;
+-
+-        out[0] = vp.dwWidth / 2 + vp.dwX + x * vp.dvScaleX;
+-        out[1] = vp.dwHeight / 2 + vp.dwY - y * vp.dvScaleY;
++        out[0] = offX + x * scaleX;
++        out[1] = offY + y * scaleY;
+         out[2] = z;
+         out[3] = w;
++        /*
++        FIXME("%d: (%.2f,%.2f,%.2f)=>(%.2f,%.2f,%.2f,%.2f)=>(%.2f,%.2f,%.2f,%.2f)=>(%.1f,%.1f,%.1f,%.1f).\n",
++              i, in[0], in[1], in[2], hx, hy, hz, hw, x, y, z, w, out[0], out[1], out[2], out[3]);
++        */
+         in = (float *) ((char *) in + lpData->dwInSize);
+         out = (float *) ((char *) out + lpData->dwOutSize);
+     }
