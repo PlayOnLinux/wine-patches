@@ -1,0 +1,12 @@
+diff --git a/dlls/imm32/imm.c b/dlls/imm32/imm.c
+index ccef19d..4f26e39 100644
+--- a/dlls/imm32/imm.c
++++ b/dlls/imm32/imm.c
+@@ -2889,6 +2889,7 @@ BOOL WINAPI ImmProcessKey(HWND hwnd, HKL hKL, UINT vKey, LPARAM lKeyData, DWORD
+     BYTE state[256];
+ 
+     TRACE("%p %p %x %x %x\n",hwnd, hKL, vKey, (UINT)lKeyData, unknown);
++    return FALSE;
+ 
+     if (imc)
+         data = imc;
