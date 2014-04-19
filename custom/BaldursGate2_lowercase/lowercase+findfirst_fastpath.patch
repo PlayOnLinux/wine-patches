@@ -1,0 +1,111 @@
+diff --git a/dlls/ntdll/directory.c b/dlls/ntdll/directory.c
+index 28b0ab3..63e7809 100644
+--- a/dlls/ntdll/directory.c
++++ b/dlls/ntdll/directory.c
+@@ -2061,6 +2061,38 @@ NTSTATUS WINAPI NtQueryDirectoryFile( HANDLE handle, HANDLE event,
+     if (fchdir( fd ) != -1)
+     {
+         struct stat st;
++	/* Try to get a short cut : some programs like baldur's gate 2 just
++	 * check the existence of a file (or maybe it's just ot get some info
++	 * about it) by using findfirst. So we check if the mask is a filename
++	 * and if it is, we return the info directly.
++	 * It produces a tremendous acceleration while loading a savegame in
++	 * baldur's gate 2 ! */
++	int has_wildcard = 0,used;
++	char buf[1024],*p;
++	ntdll_wcstoumbs( 0, mask->Buffer, mask->Length, buf, 1024, NULL, &used);
++	for (p = buf; *p; p++)
++	    if (*p == '*' || *p == '?') {
++		has_wildcard = 1;
++		break;
++	    }
++	if (!has_wildcard) {
++	    int ret;
++	    ret = stat(buf,&st);
++	    if (ret) {
++		for (p = buf; *p; p++)
++		    *p = tolower(*p);
++		ret = stat(buf,&st);
++	    }
++	    if (!ret) {
++		append_entry( buffer, io, length, buf, NULL, mask, info_class );
++		goto done;
++	    } else {
++		io->u.Status = restart_scan ? STATUS_NO_SUCH_FILE : STATUS_NO_MORE_FILES;
++		goto done;
++	    }
++	}
++	// If the mask has wildcards, just use the normal behavior...
++
+         fstat( fd, &st );
+         curdir.dev = st.st_dev;
+         curdir.ino = st.st_ino;
+@@ -2121,12 +2153,23 @@ static NTSTATUS find_file_in_dir( char *unix_name, int pos, const WCHAR *name, i
+     /* so it cannot match the file we are looking for */
+     if (ret >= 0 && !used_default)
+     {
++	int n,l;
+         unix_name[pos + ret] = 0;
+         if (!stat( unix_name, &st ))
+         {
+             if (is_win_dir) *is_win_dir = is_same_file( &windir, &st );
+             return STATUS_SUCCESS;
+         }
++	l = strlen(unix_name);
++	for (n=pos; n<l; n++)
++	    unix_name[n] = tolower(unix_name[n]);
++        if (!stat( unix_name, &st ))
++        {
++	    // printf("find_file_in_dir: success on lower case %s\n",unix_name);
++            if (is_win_dir) *is_win_dir = is_same_file( &windir, &st );
++            return STATUS_SUCCESS;
++        }
++	check_case = 1; // We don't want an opendir !!!
+     }
+     if (check_case) goto not_found;  /* we want an exact match */
+ 
+@@ -2237,7 +2280,7 @@ static NTSTATUS find_file_in_dir( char *unix_name, int pos, const WCHAR *name, i
+     closedir( dir );
+ 
+ not_found:
+-    unix_name[pos - 1] = 0;
++    // unix_name[pos - 1] = 0;
+     return STATUS_OBJECT_PATH_NOT_FOUND;
+ 
+ success:
+@@ -2713,6 +2756,7 @@ static NTSTATUS lookup_unix_name( const WCHAR *name, int name_len, char **buffer
+ 
+     ret = ntdll_wcstoumbs( 0, name, name_len, unix_name + pos, unix_len - pos - 1,
+                            NULL, &used_default );
++    check_case = FALSE;
+ 
+     while (name_len && IS_SEPARATOR(*name))
+     {
+@@ -2727,7 +2771,13 @@ static NTSTATUS lookup_unix_name( const WCHAR *name, int name_len, char **buffer
+         for (p = unix_name + pos ; *p; p++) if (*p == '\\') *p = '/';
+         if (!redirect || (!strstr( unix_name, "/windows/") && strncmp( unix_name, "windows/", 8 )))
+         {
+-            if (!stat( unix_name, &st ))
++	    int ret = stat(unix_name, &st);
++	    if (ret) {
++		for (p = unix_name; *p; p++) *p = tolower(*p);
++		ret = stat(unix_name, &st);
++	    }
++
++            if (!ret)
+             {
+                 /* creation fails with STATUS_ACCESS_DENIED for the root of the drive */
+                 if (disposition == FILE_CREATE)
+@@ -2777,8 +2827,11 @@ static NTSTATUS lookup_unix_name( const WCHAR *name, int name_len, char **buffer
+                 status = STATUS_OBJECT_NAME_NOT_FOUND;
+                 if (disposition != FILE_OPEN && disposition != FILE_OVERWRITE)
+                 {
++		    /* Keep the result buffer
++		     * which contains lowercase version
+                     ret = ntdll_wcstoumbs( 0, name, end - name, unix_name + pos + 1,
+                                            MAX_DIR_ENTRY_LEN, NULL, &used_default );
++					   */
+                     if (ret > 0 && !used_default)
+                     {
+                         unix_name[pos] = '/';
