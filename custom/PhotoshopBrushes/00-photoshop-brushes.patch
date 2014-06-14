@@ -1,7 +1,8 @@
 diff --git a/dlls/user32/hook.c b/dlls/user32/hook.c
---- a/dlls/user32/hook.c	2014-03-31 12:10:17.000000000 -0700
-+++ b/dlls/user32/hook.c	2014-03-31 17:13:36.943132589 -0700
-@@ -431,9 +431,6 @@ static LRESULT call_hook( struct hook_in
+index 633704b..32c0d30 100644
+--- a/dlls/user32/hook.c
++++ b/dlls/user32/hook.c
+@@ -431,9 +431,6 @@ static LRESULT call_hook( struct hook_info *info, INT code, WPARAM wparam, LPARA
          }
      }
  
@@ -12,9 +13,10 @@ diff --git a/dlls/user32/hook.c b/dlls/user32/hook.c
  }
  
 diff --git a/dlls/user32/input.c b/dlls/user32/input.c
---- a/dlls/user32/input.c	2014-03-31 17:09:02.333849212 -0700
-+++ b/dlls/user32/input.c	2014-03-31 17:30:13.528632355 -0700
-@@ -368,7 +368,6 @@ static void check_for_events( UINT flags
+index 457e67c..8e913be 100644
+--- a/dlls/user32/input.c
++++ b/dlls/user32/input.c
+@@ -368,7 +368,6 @@ static void check_for_events( UINT flags )
   */
  SHORT WINAPI DECLSPEC_HOTPATCH GetAsyncKeyState( INT key )
  {
@@ -22,7 +24,7 @@ diff --git a/dlls/user32/input.c b/dlls/user32/input.c
      SHORT ret;
  
      if (key < 0 || key >= 256) return 0;
-@@ -377,29 +376,15 @@ SHORT WINAPI DECLSPEC_HOTPATCH GetAsyncK
+@@ -377,24 +376,15 @@ SHORT WINAPI DECLSPEC_HOTPATCH GetAsyncKeyState( INT key )
  
      if ((ret = USER_Driver->pGetAsyncKeyState( key )) == -1)
      {
@@ -32,11 +34,6 @@ diff --git a/dlls/user32/input.c b/dlls/user32/input.c
 -            return 0;
 -
 -        if (!thread_info->key_state) thread_info->key_state = HeapAlloc( GetProcessHeap(), 0, 256 );
--
--        if (! thread_info -> msg_window) {
--            SleepEx(250, FALSE);
--            SwitchToThread();
--        }
 -
          ret = 0;
          SERVER_START_REQ( get_key_state )
@@ -53,9 +50,10 @@ diff --git a/dlls/user32/input.c b/dlls/user32/input.c
          }
          SERVER_END_REQ;
 diff --git a/dlls/user32/message.c b/dlls/user32/message.c
---- a/dlls/user32/message.c	2014-03-31 12:10:17.000000000 -0700
-+++ b/dlls/user32/message.c	2014-03-31 17:35:40.019654719 -0700
-@@ -3243,7 +3243,6 @@ static BOOL send_message( struct send_me
+index be5d995..6e64bab 100644
+--- a/dlls/user32/message.c
++++ b/dlls/user32/message.c
+@@ -3288,7 +3288,6 @@ static BOOL send_message( struct send_message_info *info, DWORD_PTR *res_ptr, BO
   */
  NTSTATUS send_hardware_message( HWND hwnd, const INPUT *input, UINT flags )
  {
@@ -63,7 +61,7 @@ diff --git a/dlls/user32/message.c b/dlls/user32/message.c
      struct send_message_info info;
      int prev_x, prev_y, new_x, new_y;
      NTSTATUS ret;
-@@ -3282,7 +3281,6 @@ NTSTATUS send_hardware_message( HWND hwn
+@@ -3327,7 +3326,6 @@ NTSTATUS send_hardware_message( HWND hwnd, const INPUT *input, UINT flags )
              req->input.hw.lparam = MAKELONG( input->u.hi.wParamL, input->u.hi.wParamH );
              break;
          }
@@ -71,7 +69,7 @@ diff --git a/dlls/user32/message.c b/dlls/user32/message.c
          ret = wine_server_call( req );
          wait = reply->wait;
          prev_x = reply->prev_x;
-@@ -3294,7 +3292,6 @@ NTSTATUS send_hardware_message( HWND hwn
+@@ -3339,7 +3337,6 @@ NTSTATUS send_hardware_message( HWND hwnd, const INPUT *input, UINT flags )
  
      if (!ret)
      {
@@ -80,8 +78,9 @@ diff --git a/dlls/user32/message.c b/dlls/user32/message.c
              USER_Driver->pSetCursorPos( new_x, new_y );
      }
 diff --git a/dlls/user32/user_main.c b/dlls/user32/user_main.c
---- a/dlls/user32/user_main.c	2014-03-31 12:10:19.000000000 -0700
-+++ b/dlls/user32/user_main.c	2014-03-31 17:36:14.165813003 -0700
+index d08a93c..6d5fe1f 100644
+--- a/dlls/user32/user_main.c
++++ b/dlls/user32/user_main.c
 @@ -308,7 +308,6 @@ static void thread_detach(void)
      if (thread_info->msg_window) WIN_DestroyThreadWindows( thread_info->msg_window );
      CloseHandle( thread_info->server_queue );
@@ -91,9 +90,10 @@ diff --git a/dlls/user32/user_main.c b/dlls/user32/user_main.c
  
      exiting_thread_id = 0;
 diff --git a/dlls/user32/user_private.h b/dlls/user32/user_private.h
---- a/dlls/user32/user_private.h	2014-03-31 12:10:19.000000000 -0700
-+++ b/dlls/user32/user_private.h	2014-03-31 17:37:19.728031026 -0700
-@@ -182,8 +182,6 @@ struct user_thread_info
+index 2bb869a..e54b4a7 100644
+--- a/dlls/user32/user_private.h
++++ b/dlls/user32/user_private.h
+@@ -184,8 +184,6 @@ struct user_thread_info
      DWORD                         GetMessagePosVal;       /* Value for GetMessagePos */
      ULONG_PTR                     GetMessageExtraInfoVal; /* Value for GetMessageExtraInfo */
      UINT                          active_hooks;           /* Bitmap of active hooks */
@@ -103,9 +103,10 @@ diff --git a/dlls/user32/user_private.h b/dlls/user32/user_private.h
      HWND                          msg_window;             /* HWND_MESSAGE parent window */
      RAWINPUT                     *rawinput;
 diff --git a/dlls/user32/winstation.c b/dlls/user32/winstation.c
---- a/dlls/user32/winstation.c	2014-03-31 12:10:19.000000000 -0700
-+++ b/dlls/user32/winstation.c	2014-03-31 17:37:35.503564358 -0700
-@@ -401,7 +401,6 @@ BOOL WINAPI SetThreadDesktop( HDESK hand
+index 12b9edc..791d824 100644
+--- a/dlls/user32/winstation.c
++++ b/dlls/user32/winstation.c
+@@ -401,7 +401,6 @@ BOOL WINAPI SetThreadDesktop( HDESK handle )
          struct user_thread_info *thread_info = get_user_thread_info();
          thread_info->top_window = 0;
          thread_info->msg_window = 0;
