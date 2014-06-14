@@ -1,0 +1,115 @@
+diff --git a/dlls/user32/hook.c b/dlls/user32/hook.c
+--- a/dlls/user32/hook.c	2014-03-31 12:10:17.000000000 -0700
++++ b/dlls/user32/hook.c	2014-03-31 17:13:36.943132589 -0700
+@@ -431,9 +431,6 @@ static LRESULT call_hook( struct hook_in
+         }
+     }
+ 
+-    if (info->id == WH_KEYBOARD_LL || info->id == WH_MOUSE_LL)
+-        get_user_thread_info()->key_state_time = 0;  /* force refreshing the key state cache */
+-
+     return ret;
+ }
+ 
+diff --git a/dlls/user32/input.c b/dlls/user32/input.c
+--- a/dlls/user32/input.c	2014-03-31 17:09:02.333849212 -0700
++++ b/dlls/user32/input.c	2014-03-31 17:30:13.528632355 -0700
+@@ -368,7 +368,6 @@ static void check_for_events( UINT flags
+  */
+ SHORT WINAPI DECLSPEC_HOTPATCH GetAsyncKeyState( INT key )
+ {
+-    struct user_thread_info *thread_info = get_user_thread_info();
+     SHORT ret;
+ 
+     if (key < 0 || key >= 256) return 0;
+@@ -377,29 +376,15 @@ SHORT WINAPI DECLSPEC_HOTPATCH GetAsyncK
+ 
+     if ((ret = USER_Driver->pGetAsyncKeyState( key )) == -1)
+     {
+-        if (thread_info->key_state &&
+-            !(thread_info->key_state[key] & 0xc0) &&
+-            GetTickCount() - thread_info->key_state_time < 50)
+-            return 0;
+-
+-        if (!thread_info->key_state) thread_info->key_state = HeapAlloc( GetProcessHeap(), 0, 256 );
+-
+-        if (! thread_info -> msg_window) {
+-            SleepEx(250, FALSE);
+-            SwitchToThread();
+-        }
+-
+         ret = 0;
+         SERVER_START_REQ( get_key_state )
+         {
+             req->tid = 0;
+             req->key = key;
+-            if (thread_info->key_state) wine_server_set_reply( req, thread_info->key_state, 256 );
+             if (!wine_server_call( req ))
+             {
+                 if (reply->state & 0x40) ret |= 0x0001;
+                 if (reply->state & 0x80) ret |= 0x8000;
+-                thread_info->key_state_time = GetTickCount();
+             }
+         }
+         SERVER_END_REQ;
+diff --git a/dlls/user32/message.c b/dlls/user32/message.c
+--- a/dlls/user32/message.c	2014-03-31 12:10:17.000000000 -0700
++++ b/dlls/user32/message.c	2014-03-31 17:35:40.019654719 -0700
+@@ -3243,7 +3243,6 @@ static BOOL send_message( struct send_me
+  */
+ NTSTATUS send_hardware_message( HWND hwnd, const INPUT *input, UINT flags )
+ {
+-    struct user_thread_info *thread_info = get_user_thread_info();
+     struct send_message_info info;
+     int prev_x, prev_y, new_x, new_y;
+     NTSTATUS ret;
+@@ -3282,7 +3281,6 @@ NTSTATUS send_hardware_message( HWND hwn
+             req->input.hw.lparam = MAKELONG( input->u.hi.wParamL, input->u.hi.wParamH );
+             break;
+         }
+-        if (thread_info->key_state) wine_server_set_reply( req, thread_info->key_state, 256 );
+         ret = wine_server_call( req );
+         wait = reply->wait;
+         prev_x = reply->prev_x;
+@@ -3294,7 +3292,6 @@ NTSTATUS send_hardware_message( HWND hwn
+ 
+     if (!ret)
+     {
+-        if (thread_info->key_state) thread_info->key_state_time = GetTickCount();
+         if ((flags & SEND_HWMSG_INJECTED) && (prev_x != new_x || prev_y != new_y))
+             USER_Driver->pSetCursorPos( new_x, new_y );
+     }
+diff --git a/dlls/user32/user_main.c b/dlls/user32/user_main.c
+--- a/dlls/user32/user_main.c	2014-03-31 12:10:19.000000000 -0700
++++ b/dlls/user32/user_main.c	2014-03-31 17:36:14.165813003 -0700
+@@ -308,7 +308,6 @@ static void thread_detach(void)
+     if (thread_info->msg_window) WIN_DestroyThreadWindows( thread_info->msg_window );
+     CloseHandle( thread_info->server_queue );
+     HeapFree( GetProcessHeap(), 0, thread_info->wmchar_data );
+-    HeapFree( GetProcessHeap(), 0, thread_info->key_state );
+     HeapFree( GetProcessHeap(), 0, thread_info->rawinput );
+ 
+     exiting_thread_id = 0;
+diff --git a/dlls/user32/user_private.h b/dlls/user32/user_private.h
+--- a/dlls/user32/user_private.h	2014-03-31 12:10:19.000000000 -0700
++++ b/dlls/user32/user_private.h	2014-03-31 17:37:19.728031026 -0700
+@@ -182,8 +182,6 @@ struct user_thread_info
+     DWORD                         GetMessagePosVal;       /* Value for GetMessagePos */
+     ULONG_PTR                     GetMessageExtraInfoVal; /* Value for GetMessageExtraInfo */
+     UINT                          active_hooks;           /* Bitmap of active hooks */
+-    UINT                          key_state_time;         /* Time of last key state refresh */
+-    BYTE                         *key_state;              /* Cache of global key state */
+     HWND                          top_window;             /* Desktop window */
+     HWND                          msg_window;             /* HWND_MESSAGE parent window */
+     RAWINPUT                     *rawinput;
+diff --git a/dlls/user32/winstation.c b/dlls/user32/winstation.c
+--- a/dlls/user32/winstation.c	2014-03-31 12:10:19.000000000 -0700
++++ b/dlls/user32/winstation.c	2014-03-31 17:37:35.503564358 -0700
+@@ -401,7 +401,6 @@ BOOL WINAPI SetThreadDesktop( HDESK hand
+         struct user_thread_info *thread_info = get_user_thread_info();
+         thread_info->top_window = 0;
+         thread_info->msg_window = 0;
+-        thread_info->key_state_time = 0;
+     }
+     return ret;
+ }
