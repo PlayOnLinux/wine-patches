@@ -1,0 +1,43 @@
+From: Christopher Prevoe <packages@prevoe.com>
+Date: Wed, May 13, 2014 22:59:55 +0500
+Subject: [PATCH] HACK: Disallow block-based textures with sub-block size
+
+A modification of Andrea Canciani's patch which works with wine 1.7.18. His same
+comments apply and are below.
+
+It is notable that this hack breaks textures in Skyrim. I'd love a different
+solution.
+
+From: Andrea Canciani <ranma42@gmail.com>
+Date: Wed, 21 Nov 2012 23:56:52 +0100
+Subject: [PATCH] HACK: Disallow block-based textures with sub-block size
+
+League of Legends crashes when using textures with mipmaps smaller
+than a block.
+
+Work around this by forcing the failure of the creation of such
+textures.
+
+WARNING: THIS IS JUST A HACK, NOT A PROPER FIX
+
+In order to get a proper fix, we should investigate and find out why
+(and where, i.e. in wine or in the LoL client) we're overwriting the
+heap-allocated data structures (textures, freelist).
+---
+--- a/dlls/wined3d/utils.c      2014-05-02 14:15:48.000000000 -0400
++++ b/dlls/wined3d/utils.c      2014-05-13 22:59:55.629363998 -0400
+@@ -2035,7 +2035,13 @@
+     UINT pitch = wined3d_format_calculate_pitch(format, width);
+     UINT size;
+ 
+-    if (format->id == WINED3DFMT_UNKNOWN)
++    if (width < format->block_width && height < format->block_height) {
++        WARN("Invalid size: %u x %u -> %u (min %u x %u)\n",
++                width, height, size, format->block_width, format->block_height);
++
++        size = 0;
++    }
++    else if (format->id == WINED3DFMT_UNKNOWN)
+     {
+         size = 0;
+     }

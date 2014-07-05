@@ -1,0 +1,295 @@
+diff --git a/dlls/ntdll/thread.c b/dlls/ntdll/thread.c
+index c8461b0..2a92a67 100644
+--- a/dlls/ntdll/thread.c
++++ b/dlls/ntdll/thread.c
+@@ -23,6 +23,10 @@
+ 
+ #include <assert.h>
+ #include <stdarg.h>
++
++#include <stdint.h>
++#include <errno.h>
++
+ #include <sys/types.h>
+ #ifdef HAVE_SYS_MMAN_H
+ #include <sys/mman.h>
+@@ -45,6 +49,148 @@
+ #include "ddk/wdm.h"
+ #include "wine/exception.h"
+ 
++
++
++#ifdef __APPLE__
++#include <mach/mach.h>
++#include <mach/clock.h>
++#include <mach/mach_time.h>
++
++#ifndef mach_time_h
++#define mach_time_h
++
++#define TIMER_ABSTIME -1
++#define CLOCK_REALTIME CALENDAR_CLOCK
++#define CLOCK_MONOTONIC SYSTEM_CLOCK
++#define CLOCK_THREAD_CPUTIME_ID 3
++
++
++#define MT_NANO (+1.0E-9)
++#define MT_GIGA UINT64_C(1000000000)
++
++#if HP_TIMING_AVAIL
++# define CPUCLOCK_P(clock) \
++((clock) == CLOCK_PROCESS_CPUTIME_ID \
++|| ((clock) & ((1 << CLOCK_IDFIELD_SIZE) - 1)) == CLOCK_THREAD_CPUTIME_ID)
++#else
++# define CPUCLOCK_P(clock) 0
++#endif
++
++#ifndef INVALID_CLOCK_P
++# define INVALID_CLOCK_P(cl) \
++((cl) < CLOCK_REALTIME || (cl) > CLOCK_THREAD_CPUTIME_ID)
++#endif
++
++
++static double mt_timebase = 0.0;
++static uint64_t mt_timestart = 0;
++
++typedef int clockid_t;
++
++/* the mach kernel uses struct mach_timespec, so struct timespec
++    is loaded from <sys/_types/_timespec.h> for compatability */
++// struct timespec { time_t tv_sec; long tv_nsec; };
++
++int clock_gettime(clockid_t clk_id, struct timespec *tp)
++{
++    kern_return_t retval = KERN_SUCCESS;
++    if( clk_id == TIMER_ABSTIME)
++    {
++        if (!mt_timestart) { // only one timer, initilized on the first call to the TIMER
++            mach_timebase_info_data_t tb = { 0 };
++            mach_timebase_info(&tb);
++            mt_timebase = tb.numer;
++            mt_timebase /= tb.denom;
++            mt_timestart = mach_absolute_time();
++        }
++
++        double diff = (mach_absolute_time() - mt_timestart) * mt_timebase;
++        tp->tv_sec = diff * MT_NANO;
++        tp->tv_nsec = diff - (tp->tv_sec * MT_GIGA);
++    }
++    else // other clk_ids are mapped to the coresponding mach clock_service
++    {
++        clock_serv_t cclock;
++        mach_timespec_t mts;
++
++        host_get_clock_service(mach_host_self(), clk_id, &cclock);
++        retval = clock_get_time(cclock, &mts);
++        mach_port_deallocate(mach_task_self(), cclock);
++
++        tp->tv_sec = mts.tv_sec;
++        tp->tv_nsec = mts.tv_nsec;
++    }
++
++    return retval;
++}
++
++
++int
++clock_nanosleep (clockid_t clock_id, int flags, const struct timespec *req,
++struct timespec *rem)
++{
++  struct timespec now;
++
++  if (__builtin_expect (req->tv_nsec, 0) < 0
++      || __builtin_expect (req->tv_nsec, 0) >= 1000000000)
++    return EINVAL;
++
++  if (clock_id == CLOCK_THREAD_CPUTIME_ID)
++    return EINVAL;	/* POSIX specifies EINVAL for this case. */
++
++#ifdef SYSDEP_NANOSLEEP
++  SYSDEP_NANOSLEEP;
++#endif
++
++  if (CPUCLOCK_P (clock_id))
++    return ENOTSUP;
++
++  if (INVALID_CLOCK_P (clock_id))
++    return EINVAL;
++
++  /* If we got an absolute time, remap it. */
++  if (flags == TIMER_ABSTIME)
++    {
++      long int nsec;
++      long int sec;
++
++      /* Make sure we use safe data types. */
++      assert (sizeof (sec) >= sizeof (now.tv_sec));
++
++      /* Get the current time for this clock. */
++      if (__builtin_expect (clock_gettime (clock_id, &now), 0) != 0)
++return errno;
++
++      /* Compute the difference. */
++      nsec = req->tv_nsec - now.tv_nsec;
++      sec = req->tv_sec - now.tv_sec - (nsec < 0);
++      if (sec < 0)
++/* The time has already elapsed. */
++return 0;
++
++      now.tv_sec = sec;
++      now.tv_nsec = nsec + (nsec < 0 ? 1000000000 : 0);
++
++      /* From now on this is our time. */
++      req = &now;
++
++      /* Make sure we are not modifying the struct pointed to by REM. */
++      rem = NULL;
++    }
++  else if (__builtin_expect (flags, 0) != 0)
++    return EINVAL;
++  else if (clock_id != CLOCK_REALTIME)
++    /* Not supported. */
++    return ENOTSUP;
++
++  return __builtin_expect (nanosleep (req, rem), 0) ? errno : 0;
++}
++
++
++#endif
++#endif
++
++
+ WINE_DEFAULT_DEBUG_CHANNEL(thread);
+ WINE_DECLARE_DEBUG_CHANNEL(relay);
+ 
+@@ -69,6 +215,73 @@ static RTL_BITMAP tls_expansion_bitmap;
+ static RTL_BITMAP fls_bitmap;
+ static int nb_threads = 1;
+ 
++
++
++static void update_shared_data_time(void)
++{
++    LARGE_INTEGER now, start, irq;
++
++    NtQuerySystemTime( &now );
++
++    //FIXME("%lld\n", now.QuadPart);
++    
++    irq.QuadPart = (now.QuadPart - server_start_time);
++
++    user_shared_data->InterruptTime.High2Time = irq.HighPart;
++    user_shared_data->InterruptTime.LowPart = irq.LowPart;
++    user_shared_data->InterruptTime.High1Time = irq.HighPart;
++
++    user_shared_data->SystemTime.High2Time = now.HighPart;
++    user_shared_data->SystemTime.LowPart = now.LowPart;
++    user_shared_data->SystemTime.High1Time = now.HighPart;
++
++    start.QuadPart = irq.QuadPart / 10000;
++
++    user_shared_data->u.TickCount.High2Time = start.HighPart;
++    user_shared_data->u.TickCount.LowPart = start.LowPart;
++    user_shared_data->u.TickCount.High1Time = start.HighPart;
++    user_shared_data->TickCountLowDeprecated = start.LowPart;
++}
++
++static void add_timespec(struct timespec* dst, struct timespec* arg)
++{
++    dst->tv_sec += arg->tv_sec;
++    dst->tv_nsec += arg->tv_nsec;
++
++    if(dst->tv_nsec > 999999999) {
++        dst->tv_nsec -= 1000000000;
++        dst->tv_sec++;
++    }
++}
++
++static void* shared_data_thread(void *thread_arg) 
++{
++    struct timespec start, arg;
++    int e;
++
++    e = clock_gettime(CLOCK_MONOTONIC, &start);
++    if(e) {
++        FIXME("Unable to get starting time: %s (%d)\n", strerror(errno), errno);
++        return NULL;
++    }
++
++    arg.tv_sec = 0;
++    arg.tv_nsec = 15600000;
++
++    while(1) {
++        update_shared_data_time();
++        add_timespec(&start, &arg);
++        e = clock_nanosleep(CLOCK_MONOTONIC, TIMER_ABSTIME, &start, NULL);
++        //if(e) {
++        //    FIXME("clock_nanosleep failed: %s (%d)\n", strerror(e), e);
++        //}
++    }
++
++    return NULL;
++}
++
++
++
+ /***********************************************************************
+  *           get_unicode_string
+  *
+@@ -189,6 +402,8 @@ done:
+ #include <mach/mach.h>
+ #include <mach/mach_error.h>
+ 
++
++
+ static ULONG get_dyld_image_info_addr(void)
+ {
+     ULONG ret = 0;
+@@ -215,11 +430,14 @@ HANDLE thread_init(void)
+     void *addr;
+     SIZE_T size, info_size;
+     HANDLE exe_file = 0;
+-    LARGE_INTEGER now;
++    //    LARGE_INTEGER now;
+     NTSTATUS status;
+     struct ntdll_thread_data *thread_data;
+     static struct debug_info debug_info;  /* debug info for initial thread */
+ 
++    pthread_t thread;
++    int s;
++
+     virtual_init();
+ 
+     /* reserve space for shared user data */
+@@ -318,18 +536,30 @@ HANDLE thread_init(void)
+     }
+ 
+     /* initialize time values in user_shared_data */
+-    NtQuerySystemTime( &now );
++    /*    NtQuerySystemTime( &now );
+     user_shared_data->SystemTime.LowPart = now.u.LowPart;
+     user_shared_data->SystemTime.High1Time = user_shared_data->SystemTime.High2Time = now.u.HighPart;
+     user_shared_data->u.TickCountQuad = (now.QuadPart - server_start_time) / 10000;
+     user_shared_data->u.TickCount.High2Time = user_shared_data->u.TickCount.High1Time;
+     user_shared_data->TickCountLowDeprecated = user_shared_data->u.TickCount.LowPart;
++    */    
++    
+     user_shared_data->TickCountMultiplier = 1 << 24;
++        
++    update_shared_data_time();
+ 
+     fill_cpu_info();
+ 
+     NtCreateKeyedEvent( &keyed_event, GENERIC_READ | GENERIC_WRITE, NULL, 0 );
+ 
++    if(!(s = pthread_create(&thread, NULL, &shared_data_thread, NULL))) {
++        if(pthread_detach(thread))
++            FIXME("Unable to detach thread\n");
++    } else {
++        FIXME("unable to spawn thread: %s (%d)\n", strerror(s), s);
++    }
++    
++
+     return exe_file;
+ }
+ 
