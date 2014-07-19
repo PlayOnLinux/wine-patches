@@ -1,0 +1,25 @@
+From ad272615abcc027232da51c62f1bce9bf54c92d8 Mon Sep 17 00:00:00 2001
+From: Alex Henrie <alexhenrie24@gmail.com>
+Date: Wed, 19 Mar 2014 19:01:30 +0000
+Subject: [PATCH] dxgi: Initialize device even if Direct3D 10 is not supported
+
+---
+ dlls/dxgi/device.c | 3 ---
+ 1 file changed, 3 deletions(-)
+
+diff --git a/dlls/dxgi/device.c b/dlls/dxgi/device.c
+index e98a2c0..74bb9e9 100644
+--- a/dlls/dxgi/device.c
++++ b/dlls/dxgi/device.c
+@@ -405,9 +405,6 @@ HRESULT dxgi_device_init(struct dxgi_device *device, struct dxgi_device_layer *l
+     if (FAILED(hr) || caps.VertexShaderVersion < 4 || caps.PixelShaderVersion < 4)
+     {
+         WARN("Direct3D 10 is not supported on this GPU with the current shader backend.\n");
+-        if (SUCCEEDED(hr))
+-            hr = E_FAIL;
+-        goto fail;
+     }
+ 
+     EnterCriticalSection(&dxgi_cs);
+-- 
+1.8.3.2
