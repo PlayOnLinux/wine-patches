@@ -1,0 +1,115 @@
+From 7c4ac46f36eb0368c6a2c6887dd0aa9b95a8ed60 Mon Sep 17 00:00:00 2001
+From: Marcus Meissner <marcus@jet.franken.de>
+Date: Sat, 11 Jan 2014 16:12:43 +0100
+Subject: [PATCH 17/17] kernel32: threadpool stubs
+
+---
+ dlls/kernel32/kernel32.spec |  4 +++
+ dlls/kernel32/thread.c      | 65 +++++++++++++++++++++++++++++++++++++++++++++
+ 2 files changed, 69 insertions(+)
+
+diff --git a/dlls/kernel32/kernel32.spec b/dlls/kernel32/kernel32.spec
+index 02b1bdb..de17253 100644
+--- a/dlls/kernel32/kernel32.spec
++++ b/dlls/kernel32/kernel32.spec
+@@ -194,6 +194,7 @@
+ @ stdcall CloseHandle(long)
+ @ stdcall CloseProfileUserMapping()
+ @ stub CloseSystemHandle
++@ stdcall CloseThreadpoolWork(ptr)
+ @ stdcall CmdBatNotification(long)
+ @ stdcall CommConfigDialogA(str long ptr)
+ @ stdcall CommConfigDialogW(wstr long ptr)
+@@ -265,6 +266,8 @@
+ @ stdcall CreateSocketHandle()
+ @ stdcall CreateTapePartition(long long long long)
+ @ stdcall CreateThread(ptr long ptr long long ptr)
++@ stdcall CreateThreadpool(ptr)
++@ stdcall CreateThreadpoolWork(ptr ptr ptr)
+ @ stdcall CreateTimerQueue ()
+ @ stdcall CreateTimerQueueTimer(ptr long ptr ptr long long long)
+ @ stdcall CreateToolhelp32Snapshot(long long)
+@@ -1197,6 +1200,7 @@
+ @ stdcall Sleep(long)
+ @ stdcall SleepConditionVariableCS(ptr ptr long)
+ @ stdcall SleepEx(long long)
++@ stdcall SubmitThreadpoolWork(ptr)
+ @ stdcall SuspendThread(long)
+ @ stdcall SwitchToFiber(ptr)
+ @ stdcall SwitchToThread()
+diff --git a/dlls/kernel32/thread.c b/dlls/kernel32/thread.c
+index 5d87cdd..8790ab6 100644
+--- a/dlls/kernel32/thread.c
++++ b/dlls/kernel32/thread.c
+@@ -832,3 +832,68 @@ BOOL WINAPI GetThreadPreferredUILanguages( DWORD flags, PULONG count, PCZZWSTR b
+     *buffersize = 0;
+     return TRUE;
+ }
++
++typedef struct _TP_POOL TP_POOL,*PTP_POOL;
++typedef struct _TP_WORK TP_WORK,*PTP_WORK;
++
++typedef struct _TP_CALLBACK_INSTANCE TP_CALLBACK_INSTANCE,*PTP_CALLBACK_INSTANCE;
++typedef struct _TP_CALLBACK_ENVIRON {
++	/* empty */
++} TP_CALLBACK_ENVIRON, *PTP_CALLBACK_ENVIRON;
++
++typedef VOID (CALLBACK *PTP_WORK_CALLBACK)(PTP_CALLBACK_INSTANCE Instance, PVOID Context, PTP_WORK Work);
++
++struct _TP_WORK {
++	PTP_WORK_CALLBACK	callback;
++	PVOID			pv;
++	PTP_CALLBACK_ENVIRON	callbackenviron;
++};
++
++
++/***********************************************************************
++ *              CreateThreadpool (KERNEL32.@)
++ */
++PTP_POOL WINAPI CreateThreadpool( PVOID reserved )
++{
++    FIXME( "(%p): stub\n", reserved );
++    
++    return NULL;
++}
++
++
++/***********************************************************************
++ *              CreateThreadpoolWork (KERNEL32.@)
++ */
++PTP_WORK WINAPI CreateThreadpoolWork( PTP_WORK_CALLBACK pfnwk, PVOID pv, PTP_CALLBACK_ENVIRON pcbe )
++{
++    PTP_WORK work;
++    FIXME( "(%p, %p, %p): stub\n", pfnwk, pv, pcbe );
++
++    work = HeapAlloc(GetProcessHeap(),0,sizeof(TP_WORK));
++    if (!work) return NULL;
++    work->callback = pfnwk;
++    work->pv = pv;
++    work->callbackenviron = pcbe;
++    return work;
++}
++
++
++/***********************************************************************
++ *              SubmitThreadpoolWork (KERNEL32.@)
++ */
++VOID WINAPI SubmitThreadpoolWork( PTP_WORK work )
++{
++    FIXME( "(%p): stub... just calling %p\n", work, work->callback );
++    /* lets just execute the work */
++    work->callback(NULL, work->pv, work);
++}
++
++
++/***********************************************************************
++ *              SubmitThreadpoolWork (KERNEL32.@)
++ */
++VOID WINAPI CloseThreadpoolWork(PTP_WORK pwk)
++{
++    FIXME( "(%p): stub\n", pwk );
++}
++
+-- 
+1.8.4
+
