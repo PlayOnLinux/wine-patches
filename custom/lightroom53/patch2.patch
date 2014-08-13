@@ -1,6 +1,6 @@
-diff -ruN wine-1.6.old/dlls/kernel32/file.c wine-1.6/dlls/kernel32/file.c
---- wine-1.6.old/dlls/kernel32/file.c	2014-01-10 16:47:59.166667303 +0000
-+++ wine-1.6/dlls/kernel32/file.c	2014-01-10 16:50:32.314666548 +0000
+diff -ruN wine-1.6.2.old/dlls/kernel32/file.c wine-1.6.2/dlls/kernel32/file.c
+--- wine-1.6.2.old/dlls/kernel32/file.c	2014-01-10 16:47:59.166667303 +0000
++++ wine-1.6.2/dlls/kernel32/file.c	2014-01-10 16:50:32.314666548 +0000
 @@ -53,6 +53,7 @@
  typedef struct
  {
@@ -53,9 +53,9 @@ diff -ruN wine-1.6.old/dlls/kernel32/file.c wine-1.6/dlls/kernel32/file.c
                debugstr_w(data->cFileName), debugstr_w(data->cAlternateFileName) );
  
          ret = TRUE;
-diff -ruN wine-1.6.old/include/winbase.h wine-1.6/include/winbase.h
---- wine-1.6.old/include/winbase.h	2014-01-10 16:47:59.074667304 +0000
-+++ wine-1.6/include/winbase.h	2014-01-10 16:51:45.942666185 +0000
+diff -ruN wine-1.6.2.old/include/winbase.h wine-1.6.2/include/winbase.h
+--- wine-1.6.2.old/include/winbase.h	2014-01-10 16:47:59.074667304 +0000
++++ wine-1.6.2/include/winbase.h	2014-01-10 16:51:45.942666185 +0000
 @@ -283,9 +283,14 @@
  typedef enum _FINDEX_INFO_LEVELS
  {
