@@ -1,0 +1,32 @@
+From 3fdf512fd02bac784809bfaf2f14a2b589d55f7f Mon Sep 17 00:00:00 2001
+From: =?UTF-8?q?Stefan=20D=C3=B6singer?= <stefan@codeweavers.com>
+Date: Fri, 14 Nov 2014 14:33:11 +0100
+Subject: [PATCH 28/28] wined3d: Update fragment program constants when
+ switching from arb ffp draws.
+Reply-To: wine-devel <wine-devel@winehq.org>
+
+This (hopefully) fixes bug 37424.
+---
+ dlls/wined3d/arb_program_shader.c | 6 +++++-
+ 1 file changed, 5 insertions(+), 1 deletion(-)
+
+diff --git a/dlls/wined3d/arb_program_shader.c b/dlls/wined3d/arb_program_shader.c
+index a7bc23d..90edafe 100644
+--- a/dlls/wined3d/arb_program_shader.c
++++ b/dlls/wined3d/arb_program_shader.c
+@@ -6535,7 +6535,11 @@ static void fragment_prog_arbfp(struct wined3d_context *context, const struct wi
+             state_arb_specularenable(context, state, STATE_RENDER(WINED3D_RS_SPECULARENABLE));
+         }
+         context->last_was_pshader = FALSE;
+-    } else {
++    }
++    else if (!context->last_was_pshader)
++    {
++        if (device->shader_backend == &arb_program_shader_backend)
++            context->constant_update_mask |= WINED3D_SHADER_CONST_PS_F;
+         context->last_was_pshader = TRUE;
+     }
+ 
+-- 
+2.0.4
+
