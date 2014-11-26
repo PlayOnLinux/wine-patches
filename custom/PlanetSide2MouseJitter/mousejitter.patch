@@ -1,0 +1,37 @@
+diff --git a/dlls/user32/message.c b/dlls/user32/message.c
+index eac4e4d..edebca3 100644
+--- a/dlls/user32/message.c
++++ b/dlls/user32/message.c
+@@ -2341,7 +2341,8 @@ static BOOL process_rawinput_message( MSG *msg, const struct hardware_msg_data *
+             else if (msg_data->rawinput.mouse.data == XBUTTON2)
+                 rawinput->data.mouse.u.s.usButtonFlags |= RI_MOUSE_BUTTON_5_UP;
+         }
+-
++        if(!msg_data->info && !rawinput->data.mouse.u.s.usButtonFlags)
++            return FALSE;
+         rawinput->data.mouse.ulRawButtons       = 0;
+         rawinput->data.mouse.lLastX             = msg_data->rawinput.mouse.x;
+         rawinput->data.mouse.lLastY             = msg_data->rawinput.mouse.y;
+siro@localhost:~/wine-git/dlls$ git diff winex11.drv/mouse.c
+diff --git a/dlls/winex11.drv/mouse.c b/dlls/winex11.drv/mouse.c
+index f1e58fe..6ee8de1 100644
+--- a/dlls/winex11.drv/mouse.c
++++ b/dlls/winex11.drv/mouse.c
+@@ -1632,7 +1632,7 @@ static void X11DRV_RawMotion( XGenericEventCookie *xev )
+     input.u.mi.mouseData   = 0;
+     input.u.mi.dwFlags     = MOUSEEVENTF_MOVE;
+     input.u.mi.time        = EVENT_x11_time_to_win32_time( event->time );
+-    input.u.mi.dwExtraInfo = 0;
++    input.u.mi.dwExtraInfo = 1;
+     input.u.mi.dx          = 0;
+     input.u.mi.dy          = 0;
+ 
+@@ -1674,7 +1674,7 @@ static void X11DRV_RawMotion( XGenericEventCookie *xev )
+         if ((long)(xev->serial - thread_data->warp_serial) < 0)
+         {
+             TRACE( "pos %d,%d old serial %lu, ignoring\n", input.u.mi.dx, input.u.mi.dy, xev->serial );
+-            return;
++            //return;
+         }
+         thread_data->warp_serial = 0;  /* we caught up now */
+     }
