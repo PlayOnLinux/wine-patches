@@ -1,0 +1,15 @@
+diff --git a/dlls/ddraw/surface.c b/dlls/ddraw/surface.c
+index dca4014..b393da1 100644
+--- a/dlls/ddraw/surface.c
++++ b/dlls/ddraw/surface.c
+@@ -857,6 +857,10 @@ static HRESULT WINAPI ddraw_surface7_Blt(IDirectDrawSurface7 *iface, RECT *DestR
+     TRACE("iface %p, dst_rect %s, src_surface %p, src_rect %s, flags %#x, fx %p.\n",
+             iface, wine_dbgstr_rect(DestRect), SrcSurface, wine_dbgstr_rect(SrcRect), Flags, DDBltFx);
+ 
++	if((DestRect) || (SrcRect)) {
++		return DDERR_UNSUPPORTED;
++	}
++
+     /* Check for validity of the flags here. WineD3D Has the software-opengl selection path and would have
+      * to check at 2 places, and sometimes do double checks. This also saves the call to wined3d :-)
+      */
