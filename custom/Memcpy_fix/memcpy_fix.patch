@@ -1,0 +1,13 @@
+diff --git a/dlls/ntoskrnl.exe/ntoskrnl.c b/dlls/ntoskrnl.exe/ntoskrnl.c
+index 2d8db4b..78c0135 100644
+--- a/dlls/ntoskrnl.exe/ntoskrnl.c
++++ b/dlls/ntoskrnl.exe/ntoskrnl.c
+@@ -197,7 +197,7 @@ static NTSTATUS process_ioctl( DEVICE_OBJECT *device, ULONG code, void *in_buff,
+     *out_size = (irp.IoStatus.u.Status >= 0) ? irp.IoStatus.Information : 0;
+     if ((code & 3) == METHOD_BUFFERED)
+     {
+-        if (out_buff) memcpy( out_buff, irp.AssociatedIrp.SystemBuffer, *out_size );
++        memcpy( out_buff, irp.AssociatedIrp.SystemBuffer, *out_size );
+         HeapFree( GetProcessHeap(), 0, irp.AssociatedIrp.SystemBuffer );
+     }
+     return irp.IoStatus.u.Status;

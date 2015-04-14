@@ -12,7 +12,7 @@ index fe0f033..03cc131 100644
  static int is_directory_arg(const char* arg)
  {
 -    return arg[1] == 'B' || arg[1] == 'L' || arg[1] == 'I' || strncmp("-specs=", arg, 7) == 0;
-+    return arg[1] == 'B' || arg[1] == 'L' || arg[1] == 'I' || strncmp("-specs=", arg, 7) == 0 || strncmp("-isysroot", arg, 8) == 0 || strncmp("-iframework", arg, 11) == 0;
++    return arg[1] == 'B' || arg[1] == 'L' || arg[1] == 'I' || strncmp("-specs=", arg, 7) == 0 || strncmp("-isysroot", arg, 9) == 0 || strncmp("-iframework", arg, 11) == 0;
  }
  
  /*

@@ -1,0 +1,13 @@
+--- dlls/winex11.drv/mouse.c.orig       2013-07-23 00:32:33.834027615 -0500
++++ dlls/winex11.drv/mouse.c    2013-07-23 00:51:06.627028942 -0500
+@@ -1558,6 +1558,11 @@ void X11DRV_MotionNotify( HWND hwnd, XEv
+     XMotionEvent *event = &xev->xmotion;
+     INPUT input;
+ 
++#ifdef HAVE_X11_EXTENSIONS_XINPUT2_H
++    if (x11drv_thread_data()->xi2_state == xi_enabled)
++        return;
++#endif
++
+     TRACE( "hwnd %p/%lx pos %d,%d is_hint %d serial %lu\n",
+            hwnd, event->window, event->x, event->y, event->is_hint, event->serial );
