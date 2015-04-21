@@ -1,0 +1,32 @@
+diff -ruN wine-1.7.17.old/dlls/user32/winpos.c wine-1.7.17/dlls/user32/winpos.c
+--- wine-1.7.17.old/dlls/user32/winpos.c	2014-04-18 20:54:11.000000000 +0200
++++ wine-1.7.17/dlls/user32/winpos.c	2014-04-27 10:16:23.070859116 +0200
+@@ -2259,6 +2259,7 @@
+                           INT x, INT y, INT cx, INT cy, UINT flags )
+ {
+     WINDOWPOS winpos;
++    WCHAR buffer[128];
+ 
+     TRACE("hwnd %p, after %p, %d,%d (%dx%d), flags %08x\n",
+           hwnd, hwndInsertAfter, x, y, cx, cy, flags);
+@@ -2276,6 +2277,20 @@
+     winpos.y = y;
+     winpos.cx = cx;
+     winpos.cy = cy;
++
++	/* Fix window size of the LR5 export dialog */
++	GetWindowTextW( hwnd, buffer, sizeof(buffer)/sizeof(WCHAR) );
++	if (strcmp(debugstr_w(buffer),"L\"Exporter un fichier\"") == 0)
++	{	
++		winpos.cx = 1154;
++		winpos.cy = 829;	
++	}
++	else
++	{
++		winpos.cx = cx;
++		winpos.cy = cy;
++	}
++
+     winpos.flags = flags;
+     
+     if (WIN_IsCurrentThread( hwnd ))

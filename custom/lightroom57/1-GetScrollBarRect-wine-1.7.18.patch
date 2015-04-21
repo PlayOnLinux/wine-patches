@@ -1,0 +1,18 @@
+diff -ruN wine-1.7.17.old/dlls/user32/scroll.c wine-1.7.17/dlls/user32/scroll.c
+--- wine-1.7.17.old/dlls/user32/scroll.c	2014-04-18 20:54:11.000000000 +0200
++++ wine-1.7.17/dlls/user32/scroll.c	2014-04-27 10:13:45.926858238 +0200
+@@ -251,8 +251,12 @@
+ 	break;
+ 
+       case SB_CTL:
+-	GetClientRect( hwnd, lprect );
+-        vertical = ((wndPtr->dwStyle & SBS_VERT) != 0);
++		GetClientRect( hwnd, lprect );
++        /*vertical = ((wndPtr->dwStyle & SBS_VERT) != 0);*/
++		if (wndPtr->dwStyle & WS_HSCROLL)
++			vertical = FALSE;
++		else
++			vertical = TRUE;        
+ 	break;
+ 
+     default:

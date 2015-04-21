@@ -1,0 +1,35 @@
+diff -ruN wine-1.7.17.old/dlls/user32/menu.c wine-1.7.17/dlls/user32/menu.c
+--- wine-1.7.17.old/dlls/user32/menu.c	2014-04-18 20:54:11.000000000 +0200
++++ wine-1.7.17/dlls/user32/menu.c	2014-04-27 10:09:30.126860274 +0200
+@@ -5098,9 +5098,9 @@
+      item = MENU_FindItem (&hMenu, &uItem, MF_BYPOSITION);
+      referenceHwnd = hwnd;
+ 
++	 itemMenu = MENU_GetMenu(hMenu);
+      if(!hwnd)
+      {
+-	 itemMenu = MENU_GetMenu(hMenu);
+ 	 if (itemMenu == NULL)
+ 	     return FALSE;
+ 
+@@ -5114,7 +5114,19 @@
+ 
+      *rect = item->rect;
+ 
+-     MapWindowPoints(referenceHwnd, 0, (LPPOINT)rect, 2);
++     if (itemMenu && !(itemMenu->wFlags & MF_POPUP))
++     {
++         /* Perhaps this special case should be eliminated and the coordinates
++          * should be relative to client area instead of window frame */
++         RECT rectWnd;
++         GetWindowRect(referenceHwnd, &rectWnd);
++         rect->top += rectWnd.top;
++         rect->bottom += rectWnd.top;
++         rect->left += rectWnd.left;
++         rect->right += rectWnd.left;
++     }
++     else
++	     MapWindowPoints(referenceHwnd, 0, (LPPOINT)rect, 2);
+ 
+      return TRUE;
+ }
