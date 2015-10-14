@@ -1,0 +1,13 @@
+diff --git a/include/wininet.h b/include/wininet.h
+index 9e0fb40..fac39e8 100644
+--- a/include/wininet.h
++++ b/include/wininet.h
+@@ -46,7 +46,7 @@ typedef INTERNET_PORT * LPINTERNET_PORT;
+ #define INTERNET_MAX_PASSWORD_LENGTH    128
+ #define INTERNET_MAX_PORT_NUMBER_LENGTH 5
+ #define INTERNET_MAX_PORT_NUMBER_VALUE  65535
+-#define INTERNET_MAX_PATH_LENGTH        2048
++#define INTERNET_MAX_PATH_LENGTH        4096
+ #define INTERNET_MAX_SCHEME_LENGTH      32
+ #define INTERNET_MAX_URL_LENGTH         (INTERNET_MAX_SCHEME_LENGTH + sizeof("://")+ INTERNET_MAX_PATH_LENGTH)
+ #define INTERNET_KEEP_ALIVE_UNKNOWN     ((DWORD)-1)
