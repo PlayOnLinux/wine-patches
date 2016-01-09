@@ -113,4 +113,4 @@ wine-1.7.52	staging-LOL3
 wine-1.7.53	steam_crossoverhack
 wine-1.7.55	d3dadapter
 wine-1.8	steam_crossoverhack
-wine-1.8	d3d_doublebuffer_mt
+wine-1.8	d3d_doublebuffer
