@@ -123,3 +123,4 @@ wine-1.8	steam_crossoverhack
 wine-1.8	d3d_doublebuffer
 wine-1.9.2	LeagueOfLegends5
 wine-1.9.2	staging-LOL3
+wine-1.9.2	staging-SC2_SetProcessDpiAwareness-stub
