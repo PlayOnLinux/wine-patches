@@ -1,0 +1,17 @@
+--- a/dlls/ntdll/signal_i386.c	
++++ a/dlls/ntdll/signal_i386.c	
+@@ -2074,6 +2074,14 @@ static void segv_handler( int signal, siginfo_t *siginfo, void *sigcontext )
+         {
+             WORD err = get_error_code(context);
+             if (!err && (rec->ExceptionCode = is_privileged_instr( get_exception_context(rec) ))) break;
++            if ((err & 7) == 2 && (err >> 3) == 0x2d) /* int $0x2d */
++            {
++                CONTEXT *c = get_exception_context(rec);
++                rec->ExceptionCode = EXCEPTION_BREAKPOINT;
++                c->Eip += 3;
++                rec->ExceptionAddress = (char *)c->Eip;
++                break;
++            }
+             rec->ExceptionCode = EXCEPTION_ACCESS_VIOLATION;
+             rec->NumberParameters = 2;
+             rec->ExceptionInformation[0] = 0;
