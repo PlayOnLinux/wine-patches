@@ -1,0 +1,211 @@
+diff --git a/dlls/appwiz.cpl/appwiz.c b/dlls/appwiz.cpl/appwiz.c
+index 8119d07..d578b05 100644
+--- a/dlls/appwiz.cpl/appwiz.c
++++ b/dlls/appwiz.cpl/appwiz.c
+@@ -975,12 +975,12 @@ static LONG start_params(const WCHAR *params)
+         return FALSE;
+ 
+     if(!strcmpW(params, install_geckoW)) {
+-        install_addon(ADDON_GECKO);
++        //install_addon(ADDON_GECKO);
+         return TRUE;
+     }
+ 
+     if(!strcmpW(params, install_monoW)) {
+-        install_addon(ADDON_MONO);
++        //install_addon(ADDON_MONO);
+         return TRUE;
+     }
+ 
+diff --git a/dlls/winemac.drv/cocoa_app.m b/dlls/winemac.drv/cocoa_app.m
+index 27ebdc4..c7197e7 100644
+--- a/dlls/winemac.drv/cocoa_app.m
++++ b/dlls/winemac.drv/cocoa_app.m
+@@ -221,14 +221,18 @@ - (void) transformProcessToForeground
+             NSString* title;
+             NSMenuItem* item;
+ 
+-            [NSApp setActivationPolicy:NSApplicationActivationPolicyRegular];
+-            [NSApp activateIgnoringOtherApps:YES];
+-
+             mainMenu = [[[NSMenu alloc] init] autorelease];
+ 
+             // Application menu
+-            submenu = [[[NSMenu alloc] initWithTitle:WineLocalizedString(STRING_MENU_WINE)] autorelease];
+-            bundleName = [[NSBundle mainBundle] objectForInfoDictionaryKey:(NSString*)kCFBundleNameKey];
++            bundleName = [[[NSProcessInfo processInfo]environment]objectForKey:@"BUNDLE_NAME"];
++            if([bundleName length] == 0)
++                bundleName = @"Wine";
++		
++            submenu = [[[NSMenu alloc] initWithTitle:bundleName] autorelease];
++            if(  [[[[NSProcessInfo processInfo]environment]objectForKey:@"HIDE_WINE"] isEqualToString: @"TRUE"] )
++                [NSApp setActivationPolicy:NSApplicationActivationPolicyProhibited];
++            else 
++                [NSApp setActivationPolicy:NSApplicationActivationPolicyRegular];
+ 
+             if ([bundleName length])
+                 title = [NSString stringWithFormat:WineLocalizedString(STRING_MENU_ITEM_HIDE_APPNAME), bundleName];
+@@ -239,7 +243,7 @@ - (void) transformProcessToForeground
+             item = [submenu addItemWithTitle:WineLocalizedString(STRING_MENU_ITEM_HIDE_OTHERS)
+                                       action:@selector(hideOtherApplications:)
+                                keyEquivalent:@"h"];
+-            [item setKeyEquivalentModifierMask:NSCommandKeyMask | NSAlternateKeyMask];
++            [item setKeyEquivalentModifierMask:NSCommandKeyMask];
+ 
+             item = [submenu addItemWithTitle:WineLocalizedString(STRING_MENU_ITEM_SHOW_ALL)
+                                       action:@selector(unhideAllApplications:)
+@@ -252,7 +256,7 @@ - (void) transformProcessToForeground
+             else
+                 title = WineLocalizedString(STRING_MENU_ITEM_QUIT);
+             item = [submenu addItemWithTitle:title action:@selector(terminate:) keyEquivalent:@"q"];
+-            [item setKeyEquivalentModifierMask:NSCommandKeyMask | NSAlternateKeyMask];
++            [item setKeyEquivalentModifierMask:NSCommandKeyMask];
+             item = [[[NSMenuItem alloc] init] autorelease];
+             [item setTitle:WineLocalizedString(STRING_MENU_WINE)];
+             [item setSubmenu:submenu];
+@@ -281,11 +285,13 @@ - (void) transformProcessToForeground
+             [item setTitle:WineLocalizedString(STRING_MENU_WINDOW)];
+             [item setSubmenu:submenu];
+             [mainMenu addItem:item];
+-
++            if( ! [[[[NSProcessInfo processInfo]environment]objectForKey:@"SET_ICON"] isEqualToString: @"FALSE"] )
++            {
++                    [NSApp setApplicationIconImage:self.applicationIcon];
++            }
+             [NSApp setMainMenu:mainMenu];
+             [NSApp setWindowsMenu:submenu];
+ 
+-            [NSApp setApplicationIconImage:self.applicationIcon];
+         }
+     }
+ 
+diff --git a/loader/wine_info.plist.in b/loader/wine_info.plist.in
+index 6495b8f..b7f374f 100644
+--- a/loader/wine_info.plist.in
++++ b/loader/wine_info.plist.in
+@@ -9,13 +9,17 @@
+     <key>CFBundleExecutable</key>
+     <string>wine</string>
+     <key>CFBundleIdentifier</key>
+-    <string>org.winehq.wine</string>
++    <string>com.playonmac.shape3D</string>
++    <key>CFBundleGetInfoString</key>
++    <string>com.playonmac.shape3D</string>
+     <key>CFBundleInfoDictionaryVersion</key>
+     <string>6.0</string>
+     <key>CFBundleName</key>
+-    <string>Wine</string>
++    <string>Shape3D X</string>
+     <key>CFBundlePackageType</key>
+     <string>APPL</string>
++    <key>CSResourcesFileMapped</key>
++    <true/>
+     <key>CFBundleShortVersionString</key>
+     <string>@PACKAGE_VERSION@</string>
+     <key>CFBundleSignature</key>
+diff --git a/programs/cmd/tests/test_cmdline.cmd b/programs/cmd/tests/test_cmdline.cmd
+index 32a1ef2..e563341 100644
+--- a/programs/cmd/tests/test_cmdline.cmd
++++ b/programs/cmd/tests/test_cmdline.cmd
+@@ -95,7 +95,6 @@ echo @echo 1 > "say one.bat"
+ echo @echo 2 > "saytwo.bat"
+ echo @echo 3 > "say (3).bat"
+ echo @echo 4 > "say .bat"
+-echo @echo 5 > "bazbaz(5).bat"
+ 
+ echo ------ Testing invocation of batch files ----------
+ call say one
+@@ -145,11 +144,6 @@ if errorlevel 2 echo error %ErrorLevel%
+ call :setError 0
+ cmd /c say" "(3) prints 4?!
+ if errorlevel 2 echo error %ErrorLevel%
+-call :setError 0
+-rem Deliberately invoking a fully qualified batch name containing a bracket
+-rem should fail, as a bracket is a command delimiter.
+-cmd /c "bazbaz(5).bat"
+-if errorlevel 1 echo Passed
+ 
+ echo ---------- Testing CMD /C quoting -----------------
+ cmd /c @echo "hi"
+@@ -267,7 +261,7 @@ call tell(1234)
+ call tell(12(34)
+ call tell(12;34)
+ echo --------- Finished  --------------
+-del tell.bat say*.* bazbaz*.bat
++del tell.bat say*.*
+ exit
+ :setError
+ exit /B %1
+diff --git a/programs/cmd/tests/test_cmdline.cmd.exp b/programs/cmd/tests/test_cmdline.cmd.exp
+index 980f674..38e17a5 100644
+--- a/programs/cmd/tests/test_cmdline.cmd.exp
++++ b/programs/cmd/tests/test_cmdline.cmd.exp
+@@ -70,7 +70,6 @@ var=33@space@
+ 0@space@
+ 3@space@
+ 4@space@
+-Passed
+ ---------- Testing CMD /C quoting -----------------
+ "hi"
+ 1@space@
+diff --git a/programs/cmd/wcmdmain.c b/programs/cmd/wcmdmain.c
+index 1aa3c1c..fb3a5e2 100644
+--- a/programs/cmd/wcmdmain.c
++++ b/programs/cmd/wcmdmain.c
+@@ -1047,6 +1047,7 @@ void WCMD_run_program (WCHAR *command, BOOL called)
+   WCHAR *firstParam;
+   BOOL  extensionsupplied = FALSE;
+   BOOL  status;
++  BOOL  assumeInternal = FALSE;
+   DWORD len;
+   static const WCHAR envPath[] = {'P','A','T','H','\0'};
+   static const WCHAR delims[] = {'/','\\',':','\0'};
+@@ -1165,8 +1166,20 @@ void WCMD_run_program (WCHAR *command, BOOL called)
+       }
+     }
+ 
++   /* Internal programs won't be picked up by this search, so even
++      though not found, try one last createprocess and wait for it
++      to complete.
++      Note: Ideally we could tell between a console app (wait) and a
++      windows app, but the API's for it fail in this case           */
++    if (!found && pathposn == NULL) {
++        WINE_TRACE("ASSUMING INTERNAL\n");
++        assumeInternal = TRUE;
++    } else {
++        WINE_TRACE("Found as %s\n", wine_dbgstr_w(thisDir));
++    }
++
+     /* Once found, launch it */
+-    if (found) {
++    if (found || assumeInternal) {
+       STARTUPINFOW st;
+       PROCESS_INFORMATION pe;
+       SHFILEINFOW psfi;
+@@ -1176,8 +1189,6 @@ void WCMD_run_program (WCHAR *command, BOOL called)
+       static const WCHAR batExt[] = {'.','b','a','t','\0'};
+       static const WCHAR cmdExt[] = {'.','c','m','d','\0'};
+ 
+-      WINE_TRACE("Found as %s\n", wine_dbgstr_w(thisDir));
+-
+       /* Special case BAT and CMD */
+       if (ext && (!strcmpiW(ext, batExt) || !strcmpiW(ext, cmdExt))) {
+         BOOL oldinteractive = interactive;
+@@ -1201,7 +1212,7 @@ void WCMD_run_program (WCHAR *command, BOOL called)
+ 
+         /* Launch the process and if a CUI wait on it to complete
+            Note: Launching internal wine processes cannot specify a full path to exe */
+-        status = CreateProcessW(thisDir,
++        status = CreateProcessW(assumeInternal?NULL : thisDir,
+                                 command, NULL, NULL, TRUE, 0, NULL, NULL, &st, &pe);
+         heap_free(st.lpReserved2);
+         if ((opt_c || opt_k) && !opt_s && !status
+@@ -1218,7 +1229,7 @@ void WCMD_run_program (WCHAR *command, BOOL called)
+ 
+         /* Always wait when non-interactive (cmd /c or in batch program),
+            or for console applications                                    */
+-        if (!interactive || (console && !HIWORD(console)))
++        if (assumeInternal || !interactive || (console && !HIWORD(console)))
+             WaitForSingleObject (pe.hProcess, INFINITE);
+         GetExitCodeProcess (pe.hProcess, &errorlevel);
+         if (errorlevel == STILL_ACTIVE) errorlevel = 0;
