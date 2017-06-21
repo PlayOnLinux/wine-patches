@@ -1,0 +1,25 @@
+diff --git a/dlls/winemac.drv/cocoa_app.m b/dlls/winemac.drv/cocoa_app.m
+index 27ebdc4..808ab58 100644
+--- a/dlls/winemac.drv/cocoa_app.m
++++ b/dlls/winemac.drv/cocoa_app.m
+@@ -139,6 +139,20 @@ + (WineApplicationController*) sharedController
+         return sharedController;
+     }
+ 
++    - (BOOL)application:(NSApplication *)sender openFile:(NSString *)filename {
++       if(filename != nil && filename.length && ([filename hasSuffix:@".s3dx"] || [filename hasSuffix:@".s3d"])) {
++             NSLog(@"Opening [%@]", filename);
++             NSAlert *alert = [[NSAlert alloc] init];
++             [alert addButtonWithTitle:@"Ok"];
++             [alert setMessageText:@"Information"];
++             [alert setInformativeText:@"Please open this file from the Shape3d application!"];
++             [alert runModal];
++             [alert release];
++        }
++    }
++
++
++
+     - (id) init
+     {
+         self = [super init];
